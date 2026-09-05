@@ -48,16 +48,30 @@ class QuotationSummaryOut(Schema):
     created_at: datetime
     last_activity_at: datetime
 
+    # These three are reached down a relation, so they need a resolver when the
+    # source is a Quotation (the list endpoint). But api.py::_detail() builds a
+    # plain dict that already carries the finished values, and Ninja hands the
+    # RAW dict to a resolver — `dict.customer` then raises AttributeError, the
+    # field is dropped, and every endpoint returning QuotationDetailOut fails
+    # response validation with "Field required". Handling both shapes keeps the
+    # list and the detail paths working through one schema.
+
     @staticmethod
     def resolve_customer_name(obj) -> str:
+        if isinstance(obj, dict):
+            return obj["customer_name"]
         return obj.customer.name
 
     @staticmethod
     def resolve_customer_tier(obj) -> str:
+        if isinstance(obj, dict):
+            return obj["customer_tier"]
         return obj.customer.tier
 
     @staticmethod
     def resolve_owner_rep_name(obj) -> str:
+        if isinstance(obj, dict):
+            return obj["owner_rep_name"]
         return obj.owner_rep.full_name or obj.owner_rep.email
 
 
@@ -137,3 +151,22 @@ class UpdateLineIn(Schema):
 
 class OrderDiscountIn(Schema):
     order_discount_percent: Decimal
+
+
+class ConfirmOut(Schema):
+    """What POST /quotations/{id}/confirm returns.
+
+    This exists because the endpoint previously declared no response schema.
+    Ninja then falls back to raw json.dumps, which cannot serialise the Django
+    model instances _detail() puts in `lines` and `events` — so confirm
+    committed its work and *then* raised, leaving the caller with a 500 on an
+    order that had actually gone through.
+    """
+
+    confirmed: bool
+    quotation: QuotationDetailOut
+    fulfillment_plan_id: int | None = None
+    subscription_ids: list[int] = []
+    invoice_id: int | None = None
+    #: Set when the quote re-entered approval instead of confirming.
+    reason: str | None = None

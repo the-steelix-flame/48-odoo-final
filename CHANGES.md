@@ -61,46 +61,76 @@ Verified: accepting a plan sets `promised_date`; backdating it raises
 
 ## 2. Bugs, gaps and risks discovered
 
-### 2.1 🔴 BLOCKER — `POST /api/quotations/{id}/confirm` returns HTTP 500
+### 2.1 ✅ FIXED — `POST /api/quotations/{id}/confirm` returned HTTP 500
 
-**Owner: @the-steelix-flame (`apps/quotations/api.py`)**
+**File owner: @the-steelix-flame. Fixed by @anubhaw0raj — flagging loudly because it is not my lane.**
+It blocked the entire H8 checkpoint and neither teammate had pushed since the v1 commit.
+
+There were **two independent causes**, and the second one was much wider than the confirm endpoint.
+
+**Cause 1 — `confirm` had no response schema.**
 
 ```
 TypeError: Object of type QuotationLine is not JSON serializable
 ```
 
-`confirm_quotation` (`apps/quotations/api.py:155`) is the **only** state-changing endpoint in that
-router without a `response=` schema. Every sibling declares `response=QuotationDetailOut`, which
-routes the payload through Pydantic. Without it, Ninja falls back to raw `json.dumps`, and
-`_detail()` (line 29) hands it live Django model instances — `lines=list(...)`, `events=list(...)`.
+`confirm_quotation` was the only state-changing endpoint in that router without a `response=`
+schema. Every sibling declares one, which routes the payload through Pydantic. Without it Ninja
+falls back to raw `json.dumps`, which cannot serialise the live model instances `_detail()` puts
+in `lines` and `events`.
 
-**This is worse than an ordinary 500.** The confirm *commits first*, then fails while serialising.
-Confirmed on Q-1003: status went to `CONFIRMED`, fulfillment plan #2 was created and invoice
-INV-1039 was issued — **and the caller still received a 500.** In a demo the rep clicks Confirm,
-sees an error, clicks again, and gets `409 Cannot move a quotation from CONFIRMED to CONFIRMED`.
-It looks like the system is broken when the data is actually correct.
+*Fix:* new `ConfirmOut` schema in `apps/quotations/schemas.py`, declared on the endpoint.
 
-This blocks the entire H8 integration checkpoint (`confirm → split → invoice`).
+**Cause 2 — EVERY `GET /api/quotations/{id}` was also returning 500.**
 
-Suggested fix — declare a response schema:
+Found while verifying the first fix. This was not a confirm problem at all:
 
-```python
-class ConfirmOut(Schema):
-    confirmed: bool
-    quotation: QuotationDetailOut
-    fulfillment_plan_id: int | None = None
-    subscription_ids: list[int] = []
-    invoice_id: int | None = None
-    reason: str | None = None
-
-@router.post("/{quotation_id}/confirm", response=ConfirmOut)
+```
+ValidationError: 3 validation errors for NinjaResponseSchema
+response.customer_name  Field required
+response.customer_tier  Field required
+response.owner_rep_name Field required
 ```
 
-Reproduce:
-```bash
-curl -X POST localhost:8000/api/quotations/<a DRAFT or APPROVED id>/confirm \
-     -H "Authorization: Bearer <token>"
+`QuotationSummaryOut` resolves those three down a relation (`obj.customer.name`). That works for
+the list endpoint, which passes `Quotation` instances. But `api.py::_detail()` returns a **plain
+dict**, and Ninja hands the **raw dict** to the resolver — so `dict.customer` raises
+`AttributeError`, the field is silently dropped, and response validation fails as "missing".
+
+Every endpoint returning `QuotationDetailOut` was affected: the quotation detail view, and every
+mutation on the builder (add line, update line, delete line, order discount, submit). **Screen 4
+could not have worked in a browser.**
+
+*Fix:* the three resolvers now accept either shape — dict key when given a dict, relation walk when
+given a model. One schema, both call paths. No behaviour change for the list endpoint.
+
+**Why this mattered more than a normal 500:** confirm *commits first*, then fails serialising.
+Verified on Q-1003 — status went to `CONFIRMED`, plan #2 created, INV-1039 issued, **and the caller
+still got a 500.** The rep clicks Confirm, sees an error, clicks again, gets a 409. It looks broken
+when the data is correct.
+
+**Files touched (3 lines + 33 lines, no logic changed):**
+
+| File | Change |
+|---|---|
+| `apps/quotations/schemas.py` | New `ConfirmOut`; three resolvers made dict-tolerant |
+| `apps/quotations/api.py` | Import `ConfirmOut`; add `response=ConfirmOut` to the decorator |
+
+**Verified over real HTTP after the fix:**
+
 ```
+GET  /quotations/          200      GET /quotations/1,2,3,5   200  (were all 500)
+POST /quotations/4/submit  200 -> APPROVED
+POST /quotations/4/confirm 200 -> confirmed=true, plan #4, invoice #6,
+                                  lines+events+risk all serialised
+POST /quotations/4/confirm 409 -> clean conflict on re-confirm, not a 500
+```
+
+Every other router still returns 200; `manage.py test apps` still 28/28.
+
+**@the-steelix-flame** — please sanity-check the resolver change. If you would rather `_detail()`
+returned model instances instead, that is a bigger refactor but arguably cleaner; this fix was
+chosen to be the smallest safe change that unblocks the demo.
 
 ### 2.2 🟡 `DEBUG=True` leaks full tracebacks over HTTP
 
@@ -149,7 +179,7 @@ Extended Warranty line). The wireframes are illustrative. **`seed_demo` is the s
 
 | # | Item | Owner | Priority |
 |---|---|---|---|
-| 1 | Fix the `confirm` 500 — add a `response=` schema (§2.1) | @the-steelix-flame | 🔴 blocker |
+| 1 | ~~Fix the `confirm` 500~~ — **done** (§2.1). Review the resolver change | @the-steelix-flame | ✅ review |
 | 2 | **Re-run `python manage.py migrate`** — new `fulfillment/0003` migration | everyone | 🔴 do now |
 | 3 | Set East Depot `lead_time_days = 6` in `seed_demo` so the split visibly trades cost against speed | @sinjeki | 🟡 demo quality |
 | 4 | Decide the risk-band mismatch vs the mockup (§2.6) | @the-steelix-flame | 🟡 |
