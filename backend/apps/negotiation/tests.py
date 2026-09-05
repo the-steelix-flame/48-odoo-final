@@ -171,6 +171,71 @@ class NegotiationThreadTests(PortalTestBase):
         negotiation.send_to_customer(quotation, actor=self.rep)
         return quotation
 
+    def test_every_move_survives_in_order_including_a_superseded_offer(self):
+        """The regression this event log exists for.
+
+        The timeline used to be derived from each request's CURRENT status, so
+        accepting our counter overwrote the "we offered 12%" moment with
+        "accepted" and it vanished. Both moves must remain, in order.
+        """
+        quotation = self._sent()
+        request = negotiation.submit_request(
+            quotation, actor=self.buyer,
+            requested_discount_percent=Decimal("25"), message="Can you do 25%?",
+        )
+        negotiation.counter_request(
+            request, actor=self.rep, counter_discount_percent=Decimal("12"),
+            note="12% is our best.",
+        )
+        negotiation.accept_counter(request, actor=self.buyer)
+
+        timeline = negotiation.negotiation_timeline(quotation)
+        kinds = [entry["kind"] for entry in timeline]
+
+        self.assertEqual(
+            kinds, ["SENT", "COUNTER_REQUEST", "REP_COUNTER", "ACCEPTED"],
+            "every move must survive, in the order it happened",
+        )
+
+        asked, offered, agreed = timeline[1], timeline[2], timeline[3]
+        self.assertEqual(asked["discount_percent"], Decimal("25.00"))
+        self.assertEqual(asked["author_type"], "CUSTOMER")
+        self.assertEqual(offered["discount_percent"], Decimal("12.00"))
+        self.assertEqual(offered["author_type"], "REP")
+        self.assertEqual(agreed["discount_percent"], Decimal("12.00"))
+        self.assertEqual(agreed["author_type"], "CUSTOMER")
+
+        stamps = [entry["created_at"] for entry in timeline]
+        self.assertEqual(stamps, sorted(stamps))
+
+    def test_customers_are_named_as_their_company_not_the_portal_login(self):
+        quotation = self._sent()
+        negotiation.submit_request(
+            quotation, actor=self.buyer, requested_discount_percent=Decimal("20")
+        )
+        entry = [
+            e for e in negotiation.negotiation_timeline(quotation)
+            if e["kind"] == "COUNTER_REQUEST"
+        ][0]
+        self.assertEqual(entry["author_name"], "Portal Co")
+        # The login is named "Portal Co (portal)" — the thread must show the
+        # company, not the account.
+        self.assertNotEqual(entry["author_name"], self.buyer.full_name)
+
+    def test_the_log_is_never_rewritten_by_later_moves(self):
+        quotation = self._sent()
+        request = negotiation.submit_request(
+            quotation, actor=self.buyer, requested_discount_percent=Decimal("25")
+        )
+        before = len(negotiation.negotiation_timeline(quotation))
+        negotiation.counter_request(
+            request, actor=self.rep, counter_discount_percent=Decimal("12")
+        )
+        after = negotiation.negotiation_timeline(quotation)
+        # Strictly appended — the earlier entries are untouched.
+        self.assertEqual(len(after), before + 1)
+        self.assertEqual(after[1]["discount_percent"], Decimal("25.00"))
+
     def test_timeline_interleaves_messages_and_offers_chronologically(self):
         quotation = self._sent()
         negotiation.submit_request(

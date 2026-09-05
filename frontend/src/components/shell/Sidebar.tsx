@@ -154,12 +154,10 @@ export function Sidebar() {
             </Link>
           );
         })}
-        <Link
-          href="/portal"
-          className="flex items-center gap-[9px] rounded-[9px] p-[9px_10px] text-[13.5px] font-medium text-[#B7C4D4] transition hover:bg-white/10 hover:text-[#F8FAFC]"
-        >
-          Customer portal view
-        </Link>
+        {/* "Customer portal view" was removed. The portal is a customer's own
+            surface, scoped to the quotations THEY were sent; an internal user
+            following that link either sees nothing or, worse, reads a business's
+            private view. Staff already see everything on the quotation itself. */}
         <button
           onClick={logout}
           className="flex items-center gap-[9px] rounded-[9px] p-[9px_10px] text-left text-[13.5px] font-medium text-[#9CAABC] transition hover:text-red-600"

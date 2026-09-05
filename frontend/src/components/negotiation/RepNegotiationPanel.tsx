@@ -166,12 +166,14 @@ export function RepNegotiationPanel({
                   variant="success"
                   disabled={busy}
                   onClick={() =>
+                    // Accepting already appends an ACCEPTED event carrying the
+                    // agreed figure. Posting a "we've accepted" message on top
+                    // would say the same thing twice in the thread.
                     run(
                       async () => {
                         await post(`/portal/internal/requests/${open!.id}/accept`);
                         return post(
-                          `/portal/internal/quotations/${quotationId}/messages`,
-                          { body: "We've accepted your request." },
+                          `/portal/internal/quotations/${quotationId}/negotiation`,
                         );
                       },
                       true,

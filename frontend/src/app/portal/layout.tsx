@@ -12,7 +12,7 @@
 
 import { useEffect } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 
 import { Loading } from "@/components/ui";
 import { useAuth } from "@/lib/auth";
@@ -20,6 +20,7 @@ import { useAuth } from "@/lib/auth";
 export default function PortalLayout({ children }: { children: React.ReactNode }) {
   const { user, loading, logout } = useAuth();
   const router = useRouter();
+  const pathname = usePathname();
 
   useEffect(() => {
     if (loading) return;
@@ -35,15 +36,20 @@ export default function PortalLayout({ children }: { children: React.ReactNode }
           <Link href="/portal" className="mr-2 text-lg font-semibold text-white">
             DealFlow360
           </Link>
-          <span className="rounded-lg bg-black/70 px-3 py-1.5 text-sm font-medium text-white">
-            My Quotation
-          </span>
-          <span className="rounded-lg border border-white/40 px-3 py-1.5 text-sm text-white/60">
-            Messages
-          </span>
-          <span className="rounded-lg border border-white/40 px-3 py-1.5 text-sm text-white/60">
-            Profile
-          </span>
+          {/* This was a dead <span>, so the only way back to the list was the
+              browser's back button. "Messages" and "Profile" sat beside it as
+              decoration for screens that don't exist — a nav item that does
+              nothing is worse than one that isn't there. */}
+          <Link
+            href="/portal"
+            className={`rounded-lg px-3 py-1.5 text-sm font-medium transition ${
+              pathname === "/portal"
+                ? "bg-black/70 text-white"
+                : "border border-white/40 text-white/90 hover:bg-white/15"
+            }`}
+          >
+            My Quotations
+          </Link>
           <div className="ml-auto flex items-center gap-3">
             <span className="hidden text-xs text-white/80 sm:inline">{user.full_name}</span>
             <button
