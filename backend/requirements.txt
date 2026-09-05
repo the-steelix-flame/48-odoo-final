@@ -1,0 +1,8 @@
+Django==5.1.6
+django-ninja==1.3.0
+django-cors-headers==4.6.0
+psycopg[binary]==3.2.4
+dj-database-url==2.3.0
+python-dotenv==1.0.1
+# Added at the end of the day, when auth is swapped from mock to real:
+# firebase-admin==6.6.0
