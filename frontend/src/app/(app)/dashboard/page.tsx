@@ -11,6 +11,15 @@ import { useApi } from "@/lib/useApi";
 import { useAuth } from "@/lib/auth";
 import type { DashboardData } from "@/types";
 
+/** Solid equivalents of STAGE_BAR, for the per-stage rows further down. */
+const STAGE_TRACK: Record<string, string> = {
+  DRAFT: "bg-[#64748B]",
+  PENDING_APPROVAL: "bg-[#F59E0B]",
+  APPROVED: "bg-[#10B981]",
+  SENT: "bg-[#0891B2]",
+  UNDER_NEGOTIATION: "bg-[#7C3AED]",
+};
+
 /** Stage colours for the pipeline bar, keyed on the real status values. */
 const STAGE_BAR: Record<string, string> = {
   DRAFT: "bg-[#475569]",
@@ -114,7 +123,8 @@ export default function DashboardPage() {
                 Won <span className="text-[#34D399]">{money(summary.won_value)}</span>
               </span>
               <span className="text-[#9CAABC]">
-                Margin <span className="text-[#34D399]">{money(summary.won_margin)}</span>
+                Expected margin{" "}
+                <span className="text-[#34D399]">{money(summary.won_margin)}</span>
               </span>
               {!mineActive && (
                 <span className="text-[#9CAABC]">
@@ -174,24 +184,34 @@ export default function DashboardPage() {
       <div className="grid gap-6 lg:grid-cols-3">
         <div className="lg:col-span-2">
           <Card title="Pipeline by stage" subtitle="Deals currently moving through the system">
-            {/* Minimal visual placeholder since this isn't fully wired to data yet */}
+            {/* Was a hardcoded placeholder claiming 24 confirmed deals. Once the
+                band above became real the two contradicted each other on the same
+                screen, so this reads the same computed source. */}
             <div className="space-y-4">
-               {[ 
-                 { label: "Draft", val: 12, percent: 15, color: "bg-[#64748B]" },
-                 { label: "Pending Approval", val: 3, percent: 18, color: "bg-[#F59E0B]" },
-                 { label: "Under Negotiation", val: 8, percent: 45, color: "bg-[#0891B2]" },
-                 { label: "Confirmed", val: 24, percent: 32, color: "bg-[#10B981]" }
-               ].map(stage => (
-                 <div key={stage.label}>
-                   <div className="mb-2 flex justify-between text-[13px] font-medium text-[#475569]">
-                     <span>{stage.label}</span>
-                     <span>{stage.val} deals</span>
-                   </div>
-                   <div className="h-2 w-full overflow-hidden rounded-full bg-[#F1F5F9]">
-                     <div className={`h-full rounded-full ${stage.color}`} style={{ width: `${stage.percent}%` }}></div>
-                   </div>
-                 </div>
-               ))}
+              {data.pipeline_by_stage.map((stage) => (
+                <div key={stage.status}>
+                  <div className="mb-2 flex justify-between text-[13px] font-medium text-[#475569]">
+                    <span>{stage.label}</span>
+                    <span>
+                      {stage.count} deal{stage.count === 1 ? "" : "s"}
+                      <span className="ml-[8px] font-mono text-[11px] text-[#94A3B8]">
+                        {money(stage.value)}
+                      </span>
+                    </span>
+                  </div>
+                  <div className="h-2 w-full overflow-hidden rounded-full bg-[#F1F5F9]">
+                    <div
+                      className={`h-full rounded-full ${STAGE_TRACK[stage.status] ?? "bg-[#64748B]"}`}
+                      style={{ width: `${stage.percent}%` }}
+                    />
+                  </div>
+                </div>
+              ))}
+              {data.pipeline_by_stage.every((stage) => stage.count === 0) && (
+                <p className="py-[24px] text-center text-[13px] text-[#94A3B8]">
+                  Nothing is open right now.
+                </p>
+              )}
             </div>
           </Card>
         </div>

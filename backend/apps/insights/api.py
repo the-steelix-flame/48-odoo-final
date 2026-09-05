@@ -17,6 +17,7 @@ from apps.common.enums import (
     ApprovalStatus,
     InvoiceStatus,
     QuotationStatus,
+    Role,
 )
 from apps.common.errors import NotFound
 from apps.insights.health import act_on_alert, run_sweep
@@ -220,13 +221,23 @@ def _pipeline_by_stage(open_statuses) -> list[dict]:
     return out
 
 
+#: Only these roles can create a quotation, so only these roles accumulate a
+#: personal total. Kept in step with the guard on POST /quotations/.
+OWNING_ROLES = (Role.SALES_REP, Role.ADMIN)
+
+
 def _mine(user, open_statuses) -> dict | None:
     """Scoped to the deals this person owns.
 
-    Returns None rather than a row of zeros when they own nothing, so the UI can
-    hide the toggle entirely for roles that never carry a quota.
+    Returns None rather than a row of zeros for anyone who cannot own deals, so
+    the UI hides the toggle instead of offering an empty personal scorecard.
+
+    Note this is deliberately role-gated rather than "owns at least one". Seed
+    data predates the creation rule and still has a Sales Manager and a Finance
+    user owning quotations; their value stays in the company total, it simply is
+    not attributed to them personally any more.
     """
-    if user is None:
+    if user is None or user.role not in OWNING_ROLES:
         return None
     owned = Quotation.objects.filter(owner_rep=user)
     if not owned.exists():
