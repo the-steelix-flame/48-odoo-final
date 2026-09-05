@@ -188,6 +188,46 @@ groups by quotation status, so the quote appears under Confirmed. The Approvals 
 of approval requests — per the brief, "every quotation that needed, needs, or is going through
 discount approval" — not a mirror of the pipeline.
 
+### 2.1d 🔴 OPEN — a CONFIRMED order stuck in fulfilment raises nothing
+
+Raised by @anubhaw0raj from the brief: *"Once confirmed, the order proceeds to fulfilment and
+billing."* Confirmation is **not** the end of the deal — an order can then sit unfulfilled for
+weeks on missing stock, and today nothing anywhere flags it.
+
+Current state of every confirmed order in the database:
+
+| Quote | Plan | Allocations | Shipped | promised_date | Open alerts |
+|---|---|---|---|---|---|
+| Q-1002 | #3 `SUGGESTED` | 1 | 0 | none | **NONE** |
+| Q-1003 | #2 `SUGGESTED` | 1 | 0 | none | **NONE** |
+| Q-1004 | #4 `SUGGESTED` | 1 | 0 | none | **NONE** |
+
+All three could sit like that forever and screen 14 would stay empty. Two holes combine:
+
+1. **`STALLED` only looks at `ACTIVE_STATUSES`**, which excludes `CONFIRMED` — correctly, because
+   "idle as a quotation" stops being meaningful once the customer has signed. But nothing replaced
+   it for the post-confirmation phase.
+2. **`DELIVERY_SLIPPAGE` cannot cover the gap**, because `promised_date` is only stamped by
+   `accept_plan()`. A plan that is never accepted has no promise, and the sweep filters on
+   `promised_date__isnull=False`. **Backordered rows are invisible to it by design** — they
+   deliberately get no promise, since there is nothing to promise until stock arrives.
+
+So the exact scenario the brief describes — confirmed, then blocked on stock — is the one case
+deal health cannot see.
+
+**Proposed fix (NOT implemented — awaiting team agreement):** a fourth alert type
+`FULFILMENT_STALLED`, raised when a quotation is `CONFIRMED` and, after a configurable number of
+days, its plan is still un-accepted, or has allocations neither shipped nor consolidated. Severity
+scales with age. Add `fulfilment_stalled_days_threshold` to `DealHealthConfig` so the rule stays in
+data, not in code.
+
+**Why the alert-resolution fix (§2.1c) is still correct and must not be reverted:** reverting it
+would leave Q-1004 showing `Idle 9 days` — the wrong metric for the wrong phase, describing
+quotation inactivity on a deal that is no longer a quotation. It would also permanently strand
+alerts on deals that genuinely recover (a DRAFT the rep picks back up would stay flagged forever),
+and it would still leave Q-1002 and Q-1003 with no alerts at all, because they never had one. The
+fix above closes the real gap; the revert would only hide it behind a misleading message.
+
 ### 2.2 🟡 `DEBUG=True` leaks full tracebacks over HTTP
 
 The 500 above returned a complete traceback including absolute filesystem paths
@@ -293,3 +333,63 @@ construction, because it is one signed formula rather than two code paths.
   and button have not been clicked in a real browser.
 - Everything above went through the service layer. **The HTTP path for confirm is still broken
   (§2.1)** and remains the one blocker for a genuine click-through demo.
+
+---
+
+## 5. Suggested improvements — anubhaw0raj
+
+> **⚠️ DO NOT IMPLEMENT ANY OF THIS UNTIL EXPLICITLY TOLD TO. These are suggestions only.
+> No changes are to be made to the codebase for any item in this section until the team agrees
+> and gives the go-ahead.**
+
+Taken from an alternative design document reviewed on 2026-09-05. Roughly 80% of that document is
+already built here; these are the parts that are genuinely missing and worth the time. Ranked by
+impact ÷ effort. Nothing below requires a schema migration except where stated.
+
+### S1 — Remediation hint on the approval screen ⭐ highest impact
+> *"Drop Setup Service to 13% and this auto-approves."*
+
+Per-line excess is already computed in `RiskBreakdown`. Binary-search the discount that moves the
+quote down a band by calling the existing scoring function in a loop. Turns governance from a
+blocker into a coach. ~1 hour. **Lane: @the-steelix-flame.**
+
+### S2 — `value_at_risk` in currency ⭐
+`Σ (overage_i / 100 × line_value_i)` — the money given away beyond policy. Every input already
+exists. *"This quote gives away $1,240 beyond policy"* lands far harder than *"score 47.13"*.
+~30 min. **Lane: @the-steelix-flame.**
+
+### S3 — Margin leakage report ⭐
+Cost, ceiling and excess are already stored per line. Aggregate by rep / category / tier. The
+punchline writes itself: *"68% of leakage came from lines that were individually within ceiling —
+only the blended score caught them"*, which is the brief's entire thesis proven with our own data.
+~2 hours. **Lane: shared — @anubhaw0raj (insights) + @sinjeki (reports screen).**
+
+### S4 — Approve-with-conditions (`capped_discount_pct`)
+Manager approves **at a cap** rather than yes/no; the quote self-adjusts and the audit trail records
+the counter. One column plus logic. No other team will have built it. ~2 hours, needs a migration.
+**Lane: @the-steelix-flame.**
+
+### S5 — Portal leakage test (cheap, high credibility)
+Assert the portal payload contains no key matching `/cost|margin|risk/`. The separate serialiser
+already exists; there is no test proving it holds. ~15 min. **Lane: @the-steelix-flame.**
+
+### S6 — Alert reason codes
+`[STALE_7D] [APPROVAL_WAIT_38H]` instead of a bare severity — tells a manager what to do. Fits the
+existing `DealAlert` with no schema change. ~1 hour. **Lane: @anubhaw0raj.**
+
+### Deliberately rejected
+
+- **Migrating to the other document's data model** — fatal at this stage, zero judge-visible gain.
+- **Microservices / event bus / outbox** — our modular monolith already has the boundaries.
+- **`governance_hash`** — elegant, but re-scoring on confirm already satisfies the same requirement.
+- **Scenario variants, undo/replay, LLM layer** — out of scope for the time remaining.
+- **Full clock injection** — genuinely good, but retrofitting "never call `now()` directly" across
+  ten apps is a day we do not have. `run_billing --as-of` already covers the billing demo.
+
+### Also flagged from that review
+
+**Recurring billing has no idempotency backstop.** There is no `BillingSchedule` table and
+`renew()` has no per-period guard — it unconditionally advances the period and issues an invoice.
+Safety rests entirely on `run_billing`'s date filter. A `UNIQUE(subscription_id, period_start)`
+constraint on a persisted schedule would make repeat runs safe. Worth verifying before demo day,
+especially since a time-travel demo runs that command repeatedly. **Lane: @anubhaw0raj.**
