@@ -76,11 +76,11 @@ export default function FulfillmentPage() {
           >
             {(stock ?? []).map((row) => (
               <Row key={row.id}>
-                <Cell className="font-medium text-slate-100">{row.warehouse_name}</Cell>
+                <Cell className="font-heading font-medium text-[#0F172A]">{row.warehouse_name}</Cell>
                 <Cell>{row.product_name}</Cell>
                 <Cell>{row.quantity_on_hand}</Cell>
                 <Cell>{row.quantity_reserved}</Cell>
-                <Cell className="font-medium text-slate-100">{row.available}</Cell>
+                <Cell className="font-medium text-[#0F172A]">{row.available}</Cell>
                 <Cell>
                   {row.needs_replenishment ? (
                     <Badge tone="amber">Below reorder point</Badge>
@@ -110,7 +110,7 @@ export default function FulfillmentPage() {
           <Table columns={["Order", "Customer", "Status", "Warehouses", ""]}>
             {(orders ?? []).map((order) => (
               <Row key={order.quotation_id}>
-                <Cell className="font-medium text-slate-100">{order.quotation_number}</Cell>
+                <Cell className="font-heading font-medium text-[#0F172A]">{order.quotation_number}</Cell>
                 <Cell>{order.customer_name}</Cell>
                 <Cell>
                   <Badge

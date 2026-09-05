@@ -61,7 +61,7 @@ export default function ProductsPage() {
           >
             {list.map((product) => (
               <Row key={product.id} onClick={() => router.push(`/products/${product.id}`)}>
-                <Cell className="font-medium text-slate-100">
+                <Cell className="font-heading font-medium text-[#0F172A]">
                   {product.name}
                   {product.is_promoted && (
                     <span className="ml-2">
@@ -74,7 +74,7 @@ export default function ProductsPage() {
                 <Cell>
                   {money(product.base_price)}
                   {product.is_subscription && (
-                    <span className="text-xs text-slate-500">/period</span>
+                    <span className="text-[11px] text-[#64748B]">/period</span>
                   )}
                 </Cell>
                 <Cell>{product.unit}</Cell>

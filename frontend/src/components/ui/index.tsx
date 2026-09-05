@@ -22,11 +22,11 @@ type ButtonProps = {
 };
 
 const BUTTON_VARIANTS: Record<string, string> = {
-  primary: "bg-brand text-white hover:bg-blue-500",
-  secondary: "bg-transparent text-slate-200 border border-edge hover:bg-surface",
-  success: "bg-emerald-600 text-white hover:bg-emerald-500",
-  warning: "bg-amber-600 text-white hover:bg-amber-500",
-  danger: "bg-rose-600 text-white hover:bg-rose-500",
+  primary: "bg-gradient-to-br from-[#0891B2] to-[#0E7490] text-white shadow-[0_2px_4px_rgba(8,145,178,0.15)] hover:from-[#0E7490] hover:to-[#155E75]",
+  secondary: "bg-white text-[#475569] border border-[#E2E8F0] shadow-sm hover:border-[#CBD5E1] hover:bg-[#F8FAFC]",
+  success: "bg-gradient-to-br from-[#10B981] to-[#059669] text-white shadow-[0_2px_4px_rgba(16,185,129,0.15)] hover:from-[#059669] hover:to-[#047857]",
+  warning: "bg-gradient-to-br from-[#F59E0B] to-[#D97706] text-white shadow-[0_2px_4px_rgba(245,158,11,0.15)] hover:from-[#D97706] hover:to-[#B45309]",
+  danger: "bg-gradient-to-br from-[#EF4444] to-[#DC2626] text-white shadow-[0_2px_4px_rgba(239,68,68,0.15)] hover:from-[#DC2626] hover:to-[#B91C1C]",
 };
 
 export function Button({
@@ -42,7 +42,7 @@ export function Button({
       type={type}
       onClick={onClick}
       disabled={disabled}
-      className={`rounded-lg px-4 py-2 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-40 ${BUTTON_VARIANTS[variant]} ${className}`}
+      className={`rounded-[8px] px-4 py-[9px] text-[13px] font-medium transition disabled:cursor-not-allowed disabled:opacity-50 ${BUTTON_VARIANTS[variant]} ${className}`}
     >
       {children}
     </button>
@@ -51,17 +51,17 @@ export function Button({
 
 // ------------------------------------------------------------------ Badge
 const BADGE_TONES: Record<string, string> = {
-  slate: "bg-slate-700/40 text-slate-300 border-slate-600",
-  blue: "bg-blue-500/15 text-blue-300 border-blue-700",
-  green: "bg-emerald-500/15 text-emerald-300 border-emerald-700",
-  amber: "bg-amber-500/15 text-amber-300 border-amber-700",
-  red: "bg-rose-500/15 text-rose-300 border-rose-700",
+  slate: "bg-[#F1F5F9] text-[#475569]",
+  blue: "bg-[#E0F2FE] text-[#0369A1]",
+  green: "bg-[#ECFDF5] text-[#059669]",
+  amber: "bg-[#FFFBEB] text-[#D97706] border border-[#FEF3C7]",
+  red: "bg-[#FEF2F2] text-[#DC2626]",
 };
 
 export function Badge({ children, tone = "slate" }: { children: ReactNode; tone?: string }) {
   return (
     <span
-      className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-medium ${BADGE_TONES[tone] ?? BADGE_TONES.slate}`}
+      className={`inline-flex items-center rounded-full px-[8px] py-[3px] text-[11px] font-semibold tracking-wide uppercase ${BADGE_TONES[tone] ?? BADGE_TONES.slate}`}
     >
       {children}
     </span>
@@ -84,15 +84,15 @@ export function Card({
 }) {
   return (
     <section
-      className={`rounded-xl border border-edge bg-surface p-5 ${className}`}
+      className={`rounded-[12px] border border-[#E2E8F0] bg-white p-[24px] shadow-sm transition hover:border-[#CBD5E1] hover:shadow-[0_4px_20px_-8px_rgba(0,0,0,0.08)] ${className}`}
     >
       {(title || actions) && (
-        <header className="mb-4 flex items-start justify-between gap-4">
+        <header className="mb-[20px] flex items-start justify-between gap-4">
           <div>
-            {title && <h2 className="text-base font-semibold text-slate-100">{title}</h2>}
-            {subtitle && <p className="mt-0.5 text-xs text-slate-400">{subtitle}</p>}
+            {title && <h2 className="font-heading text-[16px] font-semibold tracking-[-0.01em] text-[#0F172A]">{title}</h2>}
+            {subtitle && <p className="mt-[4px] text-[13px] text-[#64748B]">{subtitle}</p>}
           </div>
-          {actions && <div className="flex shrink-0 gap-2">{actions}</div>}
+          {actions && <div className="flex shrink-0 gap-[10px]">{actions}</div>}
         </header>
       )}
       {children}
@@ -114,18 +114,19 @@ export function StatCard({
   tone?: string;
 }) {
   const body = (
-    <div className="rounded-xl border border-edge bg-surface p-5 transition hover:border-slate-600">
-      <p className="text-xs uppercase tracking-wide text-slate-400">{label}</p>
-      <p className="mt-2 text-2xl font-semibold text-slate-100">{value}</p>
-      {hint && <p className="mt-1 text-xs text-slate-500">{hint}</p>}
+    <div className="group relative overflow-hidden rounded-[12px] border border-[#E2E8F0] bg-white p-[20px] shadow-sm transition hover:-translate-y-[2px] hover:border-[#0891B2] hover:shadow-[0_8px_24px_-12px_rgba(8,145,178,0.3)]">
+      <div className={`absolute left-0 top-0 h-[3px] w-full ${tone === 'red' ? 'bg-[#EF4444]' : tone === 'green' ? 'bg-[#10B981]' : tone === 'amber' ? 'bg-[#F59E0B]' : 'bg-[#0891B2]'}`}></div>
+      <p className="font-mono text-[11px] font-medium tracking-[0.04em] text-[#64748B] uppercase">{label}</p>
+      <p className="mt-[12px] font-heading text-[28px] font-semibold tracking-[-0.02em] text-[#0F172A]">{value}</p>
+      {hint && <p className="mt-[6px] text-[12px] text-[#64748B]">{hint}</p>}
       {tone !== "slate" && (
-        <div className="mt-3">
-          <Badge tone={tone}>{tone === "red" ? "Needs attention" : "Healthy"}</Badge>
+        <div className="mt-[12px]">
+          <Badge tone={tone}>{tone === "red" ? "Needs attention" : tone === "amber" ? "Warning" : "Healthy"}</Badge>
         </div>
       )}
     </div>
   );
-  return href ? <Link href={href}>{body}</Link> : body;
+  return href ? <Link href={href} className="block">{body}</Link> : body;
 }
 
 // ------------------------------------------------------------------ Table
@@ -137,20 +138,18 @@ export function Table({
   children: ReactNode;
 }) {
   return (
-    // Wide tables scroll inside their own container; the page body never
-    // scrolls horizontally.
-    <div className="overflow-x-auto rounded-lg border border-edge">
-      <table className="w-full min-w-[640px] text-left text-sm">
-        <thead className="bg-black/30 text-xs uppercase tracking-wide text-slate-400">
+    <div className="overflow-x-auto">
+      <table className="w-full min-w-[640px] text-left text-[13px]">
+        <thead className="border-b border-[#E2E8F0] bg-[#F8FAFC]">
           <tr>
             {columns.map((column) => (
-              <th key={column} className="px-4 py-3 font-medium">
+              <th key={column} className="p-[12px_16px] font-mono text-[11px] font-medium tracking-[0.02em] text-[#64748B] uppercase">
                 {column}
               </th>
             ))}
           </tr>
         </thead>
-        <tbody className="divide-y divide-edge">{children}</tbody>
+        <tbody className="divide-y divide-[#F1F5F9]">{children}</tbody>
       </table>
     </div>
   );
@@ -166,15 +165,18 @@ export function Row({
   return (
     <tr
       onClick={onClick}
-      className={`text-slate-300 ${onClick ? "cursor-pointer hover:bg-white/5" : ""}`}
+      className={`group relative text-[#334155] transition-colors ${onClick ? "cursor-pointer hover:bg-[#F8FAFC]" : ""}`}
     >
+      {onClick && (
+        <td className="absolute bottom-0 left-0 top-0 w-[2px] bg-transparent transition-colors group-hover:bg-[#0891B2]"></td>
+      )}
       {children}
     </tr>
   );
 }
 
 export function Cell({ children, className = "" }: { children: ReactNode; className?: string }) {
-  return <td className={`px-4 py-3 ${className}`}>{children}</td>;
+  return <td className={`p-[14px_16px] ${className}`}>{children}</td>;
 }
 
 // ------------------------------------------------------------------ Field
@@ -189,37 +191,36 @@ export function Field({
 }) {
   return (
     <label className="block">
-      <span className="mb-1.5 block text-xs font-medium text-slate-400">{label}</span>
+      <span className="mb-[6px] block text-[12.5px] font-medium text-[#475569]">{label}</span>
       {children}
-      {hint && <span className="mt-1 block text-xs text-slate-500">{hint}</span>}
+      {hint && <span className="mt-[6px] block text-[11.5px] text-[#64748B]">{hint}</span>}
     </label>
   );
 }
 
 export const inputClass =
-  "w-full rounded-lg border border-edge bg-black/30 px-3 py-2 text-sm text-slate-100 outline-none focus:border-brand";
+  "w-full rounded-[8px] border border-[#CBD5E1] bg-white p-[9px_12px] text-[13px] text-[#0F172A] shadow-[inset_0_1px_2px_rgba(0,0,0,0.03)] outline-none transition-colors placeholder:text-[#94A3B8] focus:border-[#0891B2] focus:ring-1 focus:ring-[#0891B2]";
 
 // ------------------------------------------------------------------ States
-/** Every screen must handle these three. A white box reads as broken. */
 export function Loading({ label = "Loading…" }: { label?: string }) {
-  return <p className="py-12 text-center text-sm text-slate-500">{label}</p>;
+  return <p className="py-12 text-center text-[13px] text-[#64748B]">{label}</p>;
 }
 
 export function EmptyState({ title, hint }: { title: string; hint?: string }) {
   return (
-    <div className="rounded-lg border border-dashed border-edge py-12 text-center">
-      <p className="text-sm text-slate-400">{title}</p>
-      {hint && <p className="mt-1 text-xs text-slate-500">{hint}</p>}
+    <div className="rounded-[12px] border border-dashed border-[#CBD5E1] bg-[#F8FAFC] py-[48px] text-center">
+      <p className="text-[14px] font-medium text-[#475569]">{title}</p>
+      {hint && <p className="mt-[4px] text-[13px] text-[#64748B]">{hint}</p>}
     </div>
   );
 }
 
 export function ErrorState({ message, onRetry }: { message: string; onRetry?: () => void }) {
   return (
-    <div className="rounded-lg border border-rose-800 bg-rose-950/30 p-5 text-center">
-      <p className="text-sm text-rose-300">{message}</p>
+    <div className="rounded-[12px] border border-[#FECACA] bg-[#FEF2F2] p-[20px] text-center">
+      <p className="text-[13px] text-[#DC2626]">{message}</p>
       {onRetry && (
-        <div className="mt-3">
+        <div className="mt-[12px]">
           <Button variant="secondary" onClick={onRetry}>
             Retry
           </Button>
@@ -229,10 +230,9 @@ export function ErrorState({ message, onRetry }: { message: string; onRetry?: ()
   );
 }
 
-/** The yellow explainer strip used throughout the mockup. */
 export function Note({ children }: { children: ReactNode }) {
   return (
-    <p className="rounded-lg border border-amber-900/60 bg-amber-950/30 px-4 py-3 text-xs text-amber-200/80">
+    <p className="rounded-[8px] border border-[#FDE68A] bg-[#FEF9C3] p-[12px_16px] text-[12.5px] leading-relaxed text-[#92400E]">
       {children}
     </p>
   );
@@ -248,12 +248,12 @@ export function PageHeader({
   actions?: ReactNode;
 }) {
   return (
-    <header className="mb-6 flex flex-wrap items-start justify-between gap-4">
+    <header className="mb-[24px] flex flex-wrap items-start justify-between gap-4 animate-dfIn">
       <div>
-        <h1 className="text-2xl font-semibold text-slate-100">{title}</h1>
-        {subtitle && <p className="mt-1 text-sm text-slate-400">{subtitle}</p>}
+        <h1 className="font-heading text-[28px] font-bold tracking-[-0.03em] text-[#0F172A]">{title}</h1>
+        {subtitle && <p className="mt-[4px] text-[14px] text-[#64748B]">{subtitle}</p>}
       </div>
-      {actions && <div className="flex flex-wrap gap-2">{actions}</div>}
+      {actions && <div className="flex flex-wrap gap-[10px]">{actions}</div>}
     </header>
   );
 }

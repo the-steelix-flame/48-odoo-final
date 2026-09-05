@@ -3,11 +3,24 @@
 @tailwind utilities;
 
 :root {
-  color-scheme: dark;
+  color-scheme: light;
 }
 
 body {
-  @apply bg-canvas text-slate-200 antialiased;
+  @apply bg-canvas text-[#0F172A] antialiased;
+}
+
+a {
+  @apply text-[#0891B2] hover:text-[#0E7490] transition-colors;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: #DFE5ED;
+  border-radius: 8px;
 }
 
 /* Number inputs: the spinner arrows are a hazard on discount fields. */

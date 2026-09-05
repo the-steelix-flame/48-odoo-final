@@ -64,7 +64,7 @@ export default function SubscriptionsPage() {
           >
             {rows.map((row) => (
               <Row key={row.id} onClick={() => router.push(`/subscriptions/${row.id}`)}>
-                <Cell className="font-medium text-slate-100">{row.customer_name}</Cell>
+                <Cell className="font-heading font-medium text-[#0F172A]">{row.customer_name}</Cell>
                 <Cell>{row.plan_name}</Cell>
                 <Cell>{titleCase(row.interval)}</Cell>
                 <Cell>{Number(row.quantity)}</Cell>
@@ -90,7 +90,7 @@ export default function SubscriptionsPage() {
         >
           {(plans ?? []).map((plan) => (
             <Row key={plan.id}>
-              <Cell className="font-medium text-slate-100">{plan.name}</Cell>
+              <Cell className="font-heading font-medium text-[#0F172A]">{plan.name}</Cell>
               <Cell>{titleCase(plan.interval)}</Cell>
               <Cell>{titleCase(plan.proration_mode)}</Cell>
               <Cell>{titleCase(plan.cancellation_policy)}</Cell>

@@ -89,7 +89,7 @@ export default function DiscountSettingsPage() {
           <Table columns={["Tier", "Max Discount"]}>
             {data.tier_ceilings.map((ceiling) => (
               <Row key={ceiling.id}>
-                <Cell className="font-medium text-slate-100">{ceiling.tier}</Cell>
+                <Cell className="font-heading font-medium text-[#0F172A]">{ceiling.tier}</Cell>
                 <Cell>
                   <div className="flex items-center gap-2">
                     <input
@@ -100,7 +100,7 @@ export default function DiscountSettingsPage() {
                         setEdits({ ...edits, [`tier:${ceiling.id}`]: e.target.value })
                       }
                     />
-                    <span className="text-xs text-slate-500">percent</span>
+                    <span className="text-[11px] text-[#64748B]">percent</span>
                   </div>
                 </Cell>
               </Row>
@@ -115,7 +115,7 @@ export default function DiscountSettingsPage() {
           <Table columns={["Category", "Max Discount"]}>
             {data.category_ceilings.map((ceiling) => (
               <Row key={ceiling.id}>
-                <Cell className="font-medium text-slate-100">{ceiling.category_name}</Cell>
+                <Cell className="font-heading font-medium text-[#0F172A]">{ceiling.category_name}</Cell>
                 <Cell>
                   <div className="flex items-center gap-2">
                     <input
@@ -126,7 +126,7 @@ export default function DiscountSettingsPage() {
                         setEdits({ ...edits, [`category:${ceiling.id}`]: e.target.value })
                       }
                     />
-                    <span className="text-xs text-slate-500">percent</span>
+                    <span className="text-[11px] text-[#64748B]">percent</span>
                   </div>
                 </Cell>
               </Row>
@@ -140,7 +140,7 @@ export default function DiscountSettingsPage() {
           <Table columns={["Discount range", "Band", "Approval chain"]}>
             {data.approval_rules.map((rule) => (
               <Row key={rule.id}>
-                <Cell className="text-slate-100">{rule.name}</Cell>
+                <Cell className="text-[#0F172A]">{rule.name}</Cell>
                 <Cell>
                   <Badge tone={BAND_TONE[rule.band]}>{rule.band}</Badge>
                 </Cell>
@@ -172,11 +172,11 @@ export default function DiscountSettingsPage() {
         <Card title="Risk score weights" subtitle="Tuning the score is a config change, not a deploy">
           <div className="grid gap-4 text-sm sm:grid-cols-2 lg:grid-cols-4">
             {Object.entries(data.risk_config).map(([key, value]) => (
-              <div key={key} className="rounded-lg border border-edge bg-black/20 px-3 py-2">
-                <p className="text-xs uppercase tracking-wide text-slate-500">
+              <div key={key} className="rounded-[8px] border border-[#E2E8F0] bg-[#F8FAFC] px-[12px] py-[8px]">
+                <p className="text-[11px] font-medium uppercase tracking-[0.05em] text-[#64748B]">
                   {key.replace(/_/g, " ")}
                 </p>
-                <p className="mt-1 text-slate-200">
+                <p className="mt-[4px] text-[#0F172A] font-medium">
                   {key.startsWith("weight") ? value : percent(value, 0)}
                 </p>
               </div>
