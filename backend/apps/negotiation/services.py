@@ -360,6 +360,23 @@ def accept_counter(request: NegotiationRequest, *, actor) -> Quotation:
         note=f"Customer accepted our counter at {request.counter_discount_percent}%",
     )
     _settle_round(quotation, actor=actor, reprice=True)
+
+    # The CUSTOMER accepted, so the deal is agreed. If the agreed terms need no
+    # approval there is nothing left to decide, and leaving it at APPROVED made
+    # them open the quotation a second time and press Confirm to say yes to
+    # something they had just said yes to. Their acceptance is the confirmation.
+    #
+    # Deliberately not done on the rep-accepts path: there it is the rep who
+    # agreed, and the customer has not placed the order yet — that one still
+    # lands on APPROVED and waits for them.
+    #
+    # If the new terms DO breach a ceiling, _settle_round has already moved this
+    # to PENDING_APPROVAL and the guard below leaves it there: the approvers
+    # decide first, then the customer confirms.
+    quotation.refresh_from_db()
+    if quotation.status == QuotationStatus.APPROVED:
+        quotation_services.confirm(quotation, actor=actor)
+        quotation.refresh_from_db()
     return quotation
 
 

@@ -55,12 +55,30 @@ export function Sidebar() {
     { href: "/quotations", label: "Quotations", badge: quotations?.length },
     { href: "/approvals", label: "Approvals", badge: approvals?.pending },
     { href: "/negotiations", label: "Negotiations", badge: negotiations?.length },
-    { href: "/fulfillment", label: "Fulfillment", badge: orders?.length },
+    {
+      href: "/fulfillment",
+      label: "Fulfillment",
+      badge: orders?.length,
+      // Stock and warehouse allocation are operations data. A rep has no
+      // decision to make with it, and the API now agrees.
+      roles: ["FINANCE", "SALES_MANAGER", "ADMIN"],
+    },
     { href: "/subscriptions", label: "Subscriptions" },
-    { href: "/invoices", label: "Invoices", badge: invoices?.unpaid },
+    {
+      href: "/invoices",
+      label: "Invoices",
+      badge: invoices?.unpaid,
+      roles: ["FINANCE", "SALES_MANAGER", "ADMIN"],
+    },
     { href: "/deal-health", label: "Deal Health", badge: health?.alerts.length },
     { href: "/reports", label: "Reports" },
-    { href: "/products", label: "Products" },
+    {
+      // The catalogue screen, not the product picker — a rep still adds
+      // products to a quotation, which reads the same API.
+      href: "/products",
+      label: "Products",
+      roles: ["FINANCE", "SALES_MANAGER", "ADMIN"],
+    },
   ];
 
   /**
