@@ -51,6 +51,7 @@ export default function QuotationBuilderPage({ params }: { params: Promise<{ id:
   const router = useRouter();
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [savedAt, setSavedAt] = useState<string | null>(null);
   const [addProductId, setAddProductId] = useState("");
 
   const { data, error, loading, reload, setData } = useApi<QuotationDetail>(`/quotations/${id}`);
@@ -95,7 +96,33 @@ export default function QuotationBuilderPage({ params }: { params: Promise<{ id:
   const removeLine = (lineId: number) =>
     run(() => del<QuotationDetail>(`/quotations/${id}/lines/${lineId}`));
 
+  /**
+   * Quantity and discount inputs commit on blur or Enter, so a value the user
+   * is still sitting in has not been sent yet. Blurring first makes that PATCH
+   * fire before we act, otherwise clicking straight from a half-typed discount
+   * to Submit would route the quote on the previous number.
+   */
+  function flushPendingEdit() {
+    const active = document.activeElement as HTMLElement | null;
+    if (active && typeof active.blur === "function") active.blur();
+  }
+
+  async function saveDraft() {
+    flushPendingEdit();
+    setBusy(true);
+    setActionError(null);
+    try {
+      setData(await post<QuotationDetail>(`/quotations/${id}/save-draft`));
+      setSavedAt(new Date().toLocaleTimeString());
+    } catch (err) {
+      setActionError(err instanceof ApiError ? err.message : "Could not save the draft");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function submitForApproval() {
+    flushPendingEdit();
     setBusy(true);
     setActionError(null);
     try {
@@ -360,10 +387,20 @@ export default function QuotationBuilderPage({ params }: { params: Promise<{ id:
             </dl>
 
             {editable && (
-              <div className="mt-4 flex flex-wrap gap-2">
-                <Button onClick={submitForApproval} disabled={busy || data.lines.length === 0}>
-                  {data.requires_approval ? "Submit for Approval" : "Submit (auto-approves)"}
-                </Button>
+              <div className="mt-4">
+                <div className="flex flex-wrap gap-2">
+                  <Button onClick={submitForApproval} disabled={busy || data.lines.length === 0}>
+                    {data.requires_approval ? "Submit for Approval" : "Submit (auto-approves)"}
+                  </Button>
+                  <Button variant="secondary" onClick={saveDraft} disabled={busy}>
+                    Save as Draft
+                  </Button>
+                </div>
+                {savedAt && (
+                  <p className="mt-2 text-xs text-emerald-400">
+                    Draft saved at {savedAt} — logged on the audit trail below.
+                  </p>
+                )}
               </div>
             )}
 

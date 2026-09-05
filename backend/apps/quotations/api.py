@@ -156,6 +156,23 @@ def set_order_discount(request, quotation_id: int, payload: OrderDiscountIn):
     return _detail(quotation)
 
 
+@router.post("/{quotation_id}/save-draft", response=QuotationDetailOut)
+def save_draft(request, quotation_id: int):
+    """Save Draft - screen 4's button next to Submit.
+
+    Line edits already persist as they are made, so this is not where the data
+    is written. What it does do is real: it refuses on a quotation that is no
+    longer editable, recomputes totals and risk from what is actually stored,
+    and writes a DRAFT_SAVED row so the audit trail shows the rep deliberately
+    parked the quote rather than abandoning it mid-edit.
+    """
+    quotation = _get(quotation_id)
+    services.assert_editable(quotation)
+    services.recalculate(quotation)
+    services.record_event(quotation, QuotationEventType.DRAFT_SAVED, actor=request.auth)
+    return _detail(quotation)
+
+
 @router.post("/{quotation_id}/submit", response=QuotationDetailOut)
 def submit_quotation(request, quotation_id: int):
     """Auto-routes. The rep never asks for approval — the score decides."""
