@@ -284,10 +284,15 @@ def accept_counter(request: NegotiationRequest, *, actor) -> Quotation:
         raise ValidationError("That counter-offer has no discount to apply")
 
     quotation = request.quotation
-    for line in quotation.lines.all():
-        quotation_services.update_line(
-            quotation, line.id, discount_percent=request.counter_discount_percent, actor=actor
-        )
+    # An ORDER-level discount, exactly as in `accept_request`. This path used to
+    # loop `update_line` and stamp the counter onto every line, which is the bug
+    # that function's comment describes: a 12% counter silently CUT a line
+    # already sitting at 18%, and flattening the per-line spread changed the
+    # blended risk score the deal is governed by. The two accept paths differ
+    # only in whose number is applied — the customer's ask here, the rep's
+    # counter there — so they must apply it the same way.
+    quotation.order_discount_percent = request.counter_discount_percent
+    quotation.save(update_fields=["order_discount_percent", "updated_at"])
 
     # `requested_discount_percent` is deliberately left alone. It records what
     # the customer ASKED for; overwriting it with what they settled for would
@@ -312,29 +317,50 @@ def accept_counter(request: NegotiationRequest, *, actor) -> Quotation:
         actor=actor,
         note=f"Customer accepted our counter at {request.counter_discount_percent}%",
     )
-    _reapprove_if_needed(quotation, actor=actor)
+    _settle_round(quotation, actor=actor, reprice=True)
     return quotation
 
 
-def _reapprove_if_needed(quotation: Quotation, *, actor) -> None:
-    """Shared tail of every accepted negotiation.
+def _settle_round(quotation: Quotation, *, actor, reprice: bool) -> None:
+    """Shared tail of every resolved negotiation round.
 
-    Extracted so the rep-accepts path and the customer-accepts-our-counter path
-    cannot drift apart — the whole point is that re-approval is automatic
-    regardless of who agreed.
+    Extracted so the rep-accepts, customer-accepts-our-counter and rep-declines
+    paths cannot drift apart — the whole point is that re-approval is automatic
+    regardless of who agreed, and that the quotation does not sit in
+    UNDER_NEGOTIATION once nobody is negotiating.
+
+    That second half is an invariant the UI leans on: a quotation is
+    UNDER_NEGOTIATION **exactly while a round is open**. Without it the board's
+    Negotiation column and the "awaiting you" inbox drifted in both directions —
+    a resolved quote loitered in the column with nothing to act on, and an
+    unanswered request sat on a quote parked in some other column entirely.
+
+    `reprice` is False for a decline: nothing about the deal changed, so there
+    is nothing to re-score and no reason to reopen approval.
     """
-    if not quotation.requires_approval:
-        return
-    quotation_services.transition(quotation, QuotationStatus.PENDING_APPROVAL, actor=actor)
-    from apps.approvals.services import open_approval_request
+    if reprice and quotation.requires_approval:
+        quotation_services.transition(quotation, QuotationStatus.PENDING_APPROVAL, actor=actor)
+        from apps.approvals.services import open_approval_request
 
-    open_approval_request(quotation, actor=actor)
-    quotation_services.record_event(
-        quotation,
-        QuotationEventType.SUBMITTED,
-        actor=actor,
-        note="Negotiated terms exceed approval thresholds; re-entered approval automatically.",
-    )
+        open_approval_request(quotation, actor=actor)
+        quotation_services.record_event(
+            quotation,
+            QuotationEventType.SUBMITTED,
+            actor=actor,
+            note="Negotiated terms exceed approval thresholds; re-entered approval automatically.",
+        )
+        return
+
+    if (
+        quotation.status == QuotationStatus.UNDER_NEGOTIATION
+        and open_request_for(quotation) is None
+    ):
+        # APPROVED, not SENT: SENT is only ever reached from APPROVED, so the
+        # quote was already cleared once and the terms now on it either breach
+        # no ceiling (accepted) or are the ones that were cleared (declined).
+        # The customer sees "Ready for your confirmation", which is exactly
+        # where the ball now is.
+        quotation_services.transition(quotation, QuotationStatus.APPROVED, actor=actor)
 
 
 def authorise_portal_access(user, quotation_id: int) -> Quotation:
@@ -375,6 +401,19 @@ def submit_request(
     """The customer's 'Submit Request' button."""
     if quotation.status not in (QuotationStatus.SENT, QuotationStatus.UNDER_NEGOTIATION):
         raise ValidationError("This quotation is not open for negotiation")
+    # One round at a time. `open_request_for` has always spoken of "the round
+    # currently awaiting a reply" in the singular, and every screen reads it
+    # that way — but nothing stopped a second request being stacked on an
+    # unanswered one. When the newer one was resolved the older was orphaned at
+    # SUBMITTED forever: it kept the inbox's "awaiting you" count above zero on
+    # a quotation that had already moved on, and no screen offered a way to
+    # clear it.
+    existing = open_request_for(quotation)
+    if existing is not None:
+        raise ValidationError(
+            "You already have a request awaiting our response on this quotation.",
+            negotiation_request_id=existing.id,
+        )
     if requested_discount_percent is not None and not (
         Decimal("0") <= requested_discount_percent <= Decimal("100")
     ):
@@ -470,7 +509,7 @@ def accept_request(request: NegotiationRequest, *, actor) -> Quotation:
         discount=str(request.requested_discount_percent),
     )
 
-    _reapprove_if_needed(quotation, actor=actor)
+    _settle_round(quotation, actor=actor, reprice=True)
     return quotation
 
 
@@ -498,6 +537,10 @@ def reject_request(request: NegotiationRequest, *, actor, note: str = "") -> Neg
             author=actor,
             body=note or "We're unable to offer that discount.",
         )
+    # A decline ends the round as surely as an acceptance does. Leaving the
+    # quotation in UNDER_NEGOTIATION afterwards stranded it in the board's
+    # Negotiation column with nothing left to negotiate.
+    _settle_round(request.quotation, actor=actor, reprice=False)
     return request
 
 

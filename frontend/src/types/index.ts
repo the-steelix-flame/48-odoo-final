@@ -42,12 +42,31 @@ export type FulfillmentStatus =
 export const INTERNAL_ROLES: Role[] = ["ADMIN", "SALES_REP", "SALES_MANAGER", "FINANCE"];
 
 /** Kanban columns on screen 3, in order. */
-export const PIPELINE_STAGES: { status: QuotationStatus; label: string }[] = [
-  { status: "DRAFT", label: "Draft" },
-  { status: "PENDING_APPROVAL", label: "Pending Approval" },
-  { status: "APPROVED", label: "Approved" },
-  { status: "UNDER_NEGOTIATION", label: "Negotiation" },
-  { status: "CONFIRMED", label: "Confirmed" },
+/**
+ * The Kanban columns, in pipeline order.
+ *
+ * Every status must appear in exactly one column. The board used to skip
+ * SENT, REJECTED and CANCELLED, so a quotation in any of those states was
+ * invisible on a screen whose own subtitle says "every quotation in the
+ * system" — and the sidebar count, which did include them, looked wrong when
+ * it was the board that was lying.
+ *
+ * `statuses` is a list because REJECTED and CANCELLED are one thing to a
+ * reader: the deal is closed and not coming back.
+ */
+export const PIPELINE_STAGES: {
+  statuses: QuotationStatus[];
+  label: string;
+  /** Terminal states are noise on an empty board; the pipeline itself is not. */
+  hideWhenEmpty?: boolean;
+}[] = [
+  { statuses: ["DRAFT"], label: "Draft" },
+  { statuses: ["PENDING_APPROVAL"], label: "Pending Approval" },
+  { statuses: ["APPROVED"], label: "Approved" },
+  { statuses: ["SENT"], label: "Sent" },
+  { statuses: ["UNDER_NEGOTIATION"], label: "Negotiation" },
+  { statuses: ["CONFIRMED"], label: "Confirmed" },
+  { statuses: ["REJECTED", "CANCELLED"], label: "Closed", hideWhenEmpty: true },
 ];
 
 // ---------------------------------------------------------------- accounts

@@ -275,6 +275,7 @@ class NegotiationThreadTests(PortalTestBase):
 
     def test_customer_accepting_our_counter_applies_our_number(self):
         quotation = self._sent()
+        before = quotation.lines.first().discount_percent
         request = negotiation.submit_request(
             quotation, actor=self.buyer, requested_discount_percent=Decimal("25")
         )
@@ -284,10 +285,41 @@ class NegotiationThreadTests(PortalTestBase):
         negotiation.accept_counter(request, actor=self.buyer)
 
         quotation.refresh_from_db()
-        # Our 12%, not their 25%.
-        self.assertEqual(quotation.lines.first().discount_percent, Decimal("12.00"))
+        # Our 12%, not their 25% — and as an ORDER discount, exactly as when the
+        # rep accepts the customer's ask. The per-line figures are untouched.
+        self.assertEqual(quotation.order_discount_percent, Decimal("12.00"))
+        self.assertEqual(quotation.lines.first().discount_percent, before)
         request.refresh_from_db()
         self.assertEqual(request.status, "ACCEPTED")
+
+    def test_accepting_our_counter_never_cuts_a_deeper_line(self):
+        """Regression: `accept_counter` used to loop `update_line` and stamp the
+        counter onto every line.
+
+        A line already sitting at 18% was silently CUT to a 12% counter — the
+        customer's own haggling made their price worse — and flattening the
+        spread changed the blended score the deal is governed by. The rep-accepts
+        path had been fixed for exactly this; the customer-accepts path had not,
+        so the two disagreed about what a negotiated discount even means.
+        """
+        quotation = self._quotation(discount="18")
+        quotations.submit(quotation, actor=self.rep)
+        quotation.refresh_from_db()
+        if quotation.status != QuotationStatus.APPROVED:
+            quotations.transition(quotation, QuotationStatus.APPROVED, actor=self.rep)
+        negotiation.send_to_customer(quotation, actor=self.rep)
+
+        request = negotiation.submit_request(
+            quotation, actor=self.buyer, requested_discount_percent=Decimal("25")
+        )
+        negotiation.counter_request(
+            request, actor=self.rep, counter_discount_percent=Decimal("12")
+        )
+        negotiation.accept_counter(request, actor=self.buyer)
+
+        quotation.refresh_from_db()
+        self.assertEqual(quotation.lines.first().discount_percent, Decimal("18.00"))
+        self.assertEqual(quotation.order_discount_percent, Decimal("12.00"))
 
     def test_accepting_our_counter_still_triggers_re_approval(self):
         """The re-approval tail must not depend on WHO agreed."""
@@ -358,6 +390,117 @@ class NegotiationThreadTests(PortalTestBase):
 
         negotiation.accept_counter(request, actor=self.buyer)
         self.assertIsNone(negotiation.open_request_for(quotation))
+
+
+class NegotiationRoundTests(PortalTestBase):
+    """One round at a time, and UNDER_NEGOTIATION means a round is open.
+
+    The board reads the quotation's status; the rep's inbox reads open requests.
+    Nothing tied the two together, so they drifted: the sidebar counted a
+    request awaiting a reply on a quotation the board filed under Approved, and
+    the Negotiation column sat empty while the badge said one.
+    """
+
+    def _sent(self):
+        quotation = self._quotation()
+        quotations.submit(quotation, actor=self.rep)
+        negotiation.send_to_customer(quotation, actor=self.rep)
+        return quotation
+
+    def test_a_second_request_cannot_be_stacked_on_an_unanswered_one(self):
+        quotation = self._sent()
+        negotiation.submit_request(
+            quotation, actor=self.buyer, requested_discount_percent=Decimal("25")
+        )
+        with self.assertRaises(ValidationError):
+            negotiation.submit_request(
+                quotation, actor=self.buyer, requested_discount_percent=Decimal("20")
+            )
+
+    def test_a_second_request_cannot_be_stacked_on_our_open_counter(self):
+        """A COUNTERED round is still open — it is the customer's move, and
+        their move is accept, not 'ask again and orphan the offer'."""
+        quotation = self._sent()
+        request = negotiation.submit_request(
+            quotation, actor=self.buyer, requested_discount_percent=Decimal("25")
+        )
+        negotiation.counter_request(
+            request, actor=self.rep, counter_discount_percent=Decimal("12")
+        )
+        with self.assertRaises(ValidationError):
+            negotiation.submit_request(
+                quotation, actor=self.buyer, requested_discount_percent=Decimal("20")
+            )
+
+    def test_submitting_a_request_puts_the_quote_under_negotiation(self):
+        quotation = self._sent()
+        negotiation.submit_request(
+            quotation, actor=self.buyer, requested_discount_percent=Decimal("10")
+        )
+        quotation.refresh_from_db()
+        self.assertEqual(quotation.status, QuotationStatus.UNDER_NEGOTIATION)
+
+    def test_declining_settles_the_quote_out_of_negotiation(self):
+        """A decline ends the round. The quote used to stay UNDER_NEGOTIATION
+        afterwards — parked in the board's Negotiation column with nothing left
+        to negotiate and no request to act on."""
+        quotation = self._sent()
+        request = negotiation.submit_request(
+            quotation, actor=self.buyer, requested_discount_percent=Decimal("25")
+        )
+        negotiation.reject_request(request, actor=self.rep, note="Below our floor")
+
+        quotation.refresh_from_db()
+        self.assertEqual(quotation.status, QuotationStatus.APPROVED)
+        self.assertIsNone(negotiation.open_request_for(quotation))
+
+    def test_accepting_within_the_ceilings_settles_to_approved(self):
+        quotation = self._sent()
+        request = negotiation.submit_request(
+            quotation, actor=self.buyer, requested_discount_percent=Decimal("5")
+        )
+        negotiation.accept_request(request, actor=self.rep)
+
+        quotation.refresh_from_db()
+        self.assertEqual(quotation.status, QuotationStatus.APPROVED)
+        self.assertIsNone(negotiation.open_request_for(quotation))
+
+    def test_accepting_over_a_ceiling_goes_to_approval_not_approved(self):
+        """The settle step must never short-circuit re-approval."""
+        quotation = self._sent()
+        request = negotiation.submit_request(
+            quotation, actor=self.buyer, requested_discount_percent=Decimal("40")
+        )
+        negotiation.accept_request(request, actor=self.rep)
+
+        quotation.refresh_from_db()
+        self.assertEqual(quotation.status, QuotationStatus.PENDING_APPROVAL)
+
+    def test_under_negotiation_always_means_an_open_round(self):
+        """The invariant itself, walked end to end. Every screen that places a
+        quotation by status and counts work by open request depends on it."""
+        quotation = self._sent()
+        self.assertIsNone(negotiation.open_request_for(quotation))
+
+        request = negotiation.submit_request(
+            quotation, actor=self.buyer, requested_discount_percent=Decimal("10")
+        )
+        quotation.refresh_from_db()
+        self.assertEqual(quotation.status, QuotationStatus.UNDER_NEGOTIATION)
+        self.assertIsNotNone(negotiation.open_request_for(quotation))
+
+        negotiation.counter_request(
+            request, actor=self.rep, counter_discount_percent=Decimal("8")
+        )
+        quotation.refresh_from_db()
+        # Still open — it is the customer's move now, not nobody's.
+        self.assertEqual(quotation.status, QuotationStatus.UNDER_NEGOTIATION)
+        self.assertIsNotNone(negotiation.open_request_for(quotation))
+
+        negotiation.accept_counter(request, actor=self.buyer)
+        quotation.refresh_from_db()
+        self.assertIsNone(negotiation.open_request_for(quotation))
+        self.assertNotEqual(quotation.status, QuotationStatus.UNDER_NEGOTIATION)
 
 
 class PortalIsolationTests(PortalTestBase):

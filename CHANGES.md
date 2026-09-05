@@ -678,6 +678,91 @@ Two details worth keeping:
 Customers are unaffected: `Header` mounts only in the `(app)` shell, and the portal has its own.
 `CUSTOMER` is in the map for completeness.
 
+### Three screens disagreed about how many deals there were
+
+Reported from the UI: the board showed 8 cards while the sidebar said 7, and the sidebar counted a
+negotiation the board's Negotiation column left empty. Three separate causes, all of the same
+shape — a count derived one way, next to a list derived another.
+
+**The board was hiding quotations.** `PIPELINE_STAGES` had five columns for eight statuses. `SENT`,
+`REJECTED` and `CANCELLED` had nowhere to go, so a sent quotation rendered *nowhere* on a screen
+whose own subtitle reads "every quotation in the system". Q-1009 was sitting in exactly that hole.
+The sidebar counted it, so the sidebar looked wrong when it was the board that was lying.
+
+Stages now carry `statuses: QuotationStatus[]` — a list, because `REJECTED` and `CANCELLED` are one
+thing to a reader — and every status is covered. `Closed` is `hideWhenEmpty`, so a terminal column
+doesn't sit empty on every healthy board while still guaranteeing no record is invisible.
+
+**The badge counted a different set.** It filtered to `OPEN_QUOTE_STATUSES`, excluding `CONFIRMED`,
+so it could never match the board even once `SENT` was visible. It now counts what the endpoint
+returns. That is a real trade — the badge grows as confirmed deals accumulate, which is what the
+original comment was guarding against — but a number that quietly disagrees with the list beside it
+is worse than a number that grows. Every other badge means "work waiting"; this one means "how many
+there are", matching the screen it links to.
+
+**A quotation could be under negotiation without being `UNDER_NEGOTIATION`.** The real bug.
+`submit_request` never checked for an already-open round, so a customer could stack a second request
+on an unanswered one. Resolving the newer one left the older orphaned at `SUBMITTED` forever — the
+inbox counted it, the board filed the quotation under whatever status the *newer* request had driven
+it to, and no screen offered a way to clear it. Q-1007 was in precisely that state: request #2
+unanswered since 15:31, request #3 raised 32 seconds later and accepted, quotation moved on to
+`APPROVED`.
+
+Fixed as an invariant rather than a patch: **a quotation is `UNDER_NEGOTIATION` exactly while a round
+is open.**
+
+| Change | |
+|---|---|
+| `submit_request` | Refuses a second request while one is `SUBMITTED` or `COUNTERED`. `open_request_for` always spoke of "the round currently awaiting a reply" in the singular; now nothing can contradict it. |
+| `_reapprove_if_needed` → `_settle_round` | The shared tail of *every* resolved round, decline included. Re-approval when the terms moved and breach a ceiling; otherwise transition out of `UNDER_NEGOTIATION`. |
+| `reject_request` | Now calls it. A decline ends a round as surely as an acceptance, but the quote used to stay parked in the Negotiation column with nothing left to negotiate. |
+| `0007_settle_stranded_negotiations` | Moves already-stranded quotations to `UNDER_NEGOTIATION`. |
+
+The settle target is `APPROVED`, not `SENT`: `SENT` is only ever reached *from* `APPROVED`, so the
+quote was cleared once already, and the terms now on it either breach no ceiling (accepted) or are
+the ones that were cleared (declined). The customer reads "Ready for your confirmation", which is
+where the ball actually is. `UNDER_NEGOTIATION → SENT` isn't in `ALLOWED_TRANSITIONS` anyway.
+
+**The migration deliberately does not close the orphans.** An unanswered customer request is real
+work; marking it rejected would answer the customer on the rep's behalf. It moves the quotation to
+where that work is *visible* instead. Terminal statuses are excluded — an orphan under a `CONFIRMED`
+order is history, not work, and dragging a confirmed order back into negotiation would be worse than
+the inconsistency it fixes. Not reversible: the prior status is recorded nowhere, so an automatic
+reverse would guess between `SENT` and `APPROVED` and be wrong half the time.
+
+One direction of drift is left standing on purpose. A `COUNTERED` round keeps the quotation in the
+Negotiation column while the "awaiting you" badge reads zero — correct, because that round is the
+*customer's* move. The failure that was reported is the other direction: work waiting on you, on a
+deal the board doesn't show as negotiating. That can no longer happen.
+
+### `Negotiate` on the inbox row
+
+Accept and Reject were the row's whole vocabulary, but a counter-offer is the third answer and it
+doesn't fit in a table cell — it needs the thread, the line breakdown and a number. The new button
+opens `/quotations/{id}`, where `RepNegotiationPanel` already offers accept, counter and decline
+against the same endpoints the inbox posts to. No new decision path; the row just stops being a
+dead end for the one answer it couldn't express.
+
+### Regression caught in review: the two accept paths disagreed
+
+Flagged against the change above, and correct. `accept_request` (rep accepts the customer's ask)
+sets `order_discount_percent`. `accept_counter` (customer accepts the rep's counter) still looped
+`update_line`, stamping the counter onto every line — the exact bug `accept_request`'s own comment
+describes:
+
+- a line already at 18% was silently **cut** to a 12% counter, so the customer's haggling made their
+  own price worse;
+- flattening the per-line spread changed the blended risk score the deal is governed by, because
+  `recalculate` feeds line discounts and the order discount to `score_quotation` separately.
+
+The two paths differ only in *whose* number is applied, so they must apply it the same way.
+`accept_counter` now sets `order_discount_percent` too.
+
+`test_customer_accepting_our_counter_applies_our_number` had encoded the old behaviour — it asserted
+the line was rewritten to 12% — and was updated to assert the order discount plus an untouched line.
+`test_accepting_our_counter_never_cuts_a_deeper_line` is the new regression test: an 18% line, a 12%
+counter, and an assertion that the line is still 18% afterwards.
+
 ---
 
 ## 2. What this is NOT (scope decision)
@@ -700,9 +785,21 @@ rewrite of this.
 ## 3. Verification
 
 ```bash
-cd backend && python manage.py test apps      # 70 passed (31 accounts, 11 negotiation)
+cd backend && python manage.py test apps      # 90 passed (31 accounts, 31 negotiation)
 cd frontend && npm run build                  # all routes emitted
 ```
+
+Counts read back off the running API after the changes above, rather than off the screen:
+
+| Surface | Before | After |
+|---|---|---|
+| Sidebar *Quotations* badge | 7 | **10** |
+| Board cards (all columns) | 8 — `SENT` had no column | **10** |
+| Sidebar *Negotiations* badge | 1 | 1 |
+| Board *Negotiation* column | 0 | **1** — Q-1007, the deal that request is on |
+
+`GET /portal/internal/quotations/7/negotiation` returns `open_request` `#2` at `SUBMITTED`, so the
+rep panel renders Accept / Counter / Decline on the page the new **Negotiate** button opens.
 
 Full portal loop, live against `runserver`, with a business created through the admin UI:
 
