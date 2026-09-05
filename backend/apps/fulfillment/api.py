@@ -6,7 +6,7 @@ from decimal import Decimal
 from ninja import Router, Schema
 
 from apps.accounts.auth import internal_auth, require_role
-from apps.common.enums import QuotationStatus, Role
+from apps.common.enums import FulfillmentStatus, QuotationStatus, Role
 from apps.common.errors import NotFound
 from apps.fulfillment import services
 from apps.fulfillment.models import FulfillmentPlan, StockItem, Warehouse
@@ -87,7 +87,18 @@ class PlanOut(Schema):
     estimated_cost: Decimal
     is_manual_override: bool
     consolidation_available: bool
+    #: AWAITING_BILL | PAYMENT_PENDING | PAID. Goods ship after the money
+    #: arrives, so the screen needs this to say why it cannot ship yet rather
+    #: than offering a button the service will refuse.
+    billing_state: str
     allocations: list[AllocationOut]
+
+    @staticmethod
+    def resolve_billing_state(obj) -> str:
+        from apps.billing import services as billing
+
+        state, _ = billing.billing_state(obj.quotation)
+        return state
 
     @staticmethod
     def resolve_quotation_number(obj) -> str:
@@ -129,7 +140,14 @@ def list_stock(request, warehouse_id: int | None = None, product_id: int | None 
 
 @router.get("/orders", response=list[OrderAwaitingOut])
 def orders_awaiting(request):
-    """Confirmed orders that still need shipping."""
+    """Confirmed orders that still need shipping.
+
+    "Still" is the operative word: this used to return every confirmed order
+    ever placed, so a fully despatched one sat in the queue forever and the
+    table could never empty. An order leaves once its plan reaches SHIPPED —
+    a PARTIALLY_SHIPPED plan stays, because its backorder is exactly the work
+    this screen exists to surface.
+    """
     rows = []
     quotations = (
         Quotation.objects.filter(status=QuotationStatus.CONFIRMED)
@@ -138,6 +156,8 @@ def orders_awaiting(request):
     )
     for quotation in quotations:
         plan = quotation.fulfillment_plans.first()
+        if plan is not None and plan.status == FulfillmentStatus.SHIPPED:
+            continue
         warehouses = (
             ", ".join(
                 sorted({a.warehouse.name for a in plan.allocations.all()})
@@ -185,6 +205,18 @@ def accept_plan(request, plan_id: int):
     """
     require_role(request, Role.FINANCE)
     return services.accept_plan(_get_plan(plan_id), actor=request.auth)
+
+
+@router.post("/plans/{plan_id}/ship", response=PlanOut)
+def ship_plan(request, plan_id: int):
+    """Mark Shipped — the last step of the order lifecycle.
+
+    Same Finance/Ops guard as accepting a split, and for a stronger reason:
+    this one deducts stock and tells the customer their goods are on the way.
+    The service refuses an order that has not been paid.
+    """
+    require_role(request, Role.FINANCE)
+    return services.mark_shipped(_get_plan(plan_id), actor=request.auth)
 
 
 @router.post("/plans/{plan_id}/override", response=PlanOut)

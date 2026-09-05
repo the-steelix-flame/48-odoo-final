@@ -1161,7 +1161,7 @@ earlier on settings, admin and the portal. And the confirmed-status line, which
 unconditionally read "Nothing further is needed from you", now defers to the bill
 above it when there is money outstanding; it was a direct contradiction.
 
-Verified: 11 new tests in `apps/negotiation/tests.py` (`BillingFlowTests`) walk
+Verified: 10 new tests in `apps/negotiation/tests.py` (`BillingFlowTests`) walk
 confirm → sign-off → payment → invoice, and pin the refusals — billing before
 confirmation, billing twice, paying twice, paying with no bill raised. 127 backend
 tests pass. Every real row in the dev database was also serialised through the new
@@ -1169,6 +1169,79 @@ schemas, which is where the pydantic-v2 coercion bugs have surfaced before: Q-10
 sits in `PAYMENT_PENDING`, Q-1002 in `PAID` with despatch from Main Warehouse.
 
 No migration. It reuses the existing `Invoice`, `InvoiceLine` and `Payment` models.
+
+**Two follow-ups from using it.**
+
+*The checkout's Pay button failed silently.* It was disabled until every field
+validated, with no statement of what was outstanding. Entering `09/3` in the
+expiry — a two-digit month and one digit of year — left the button grey with
+nothing on screen explaining why, and once you had tabbed on to the security
+code there was no way to find out. The button is now always clickable and
+`whatsMissing()` names the incomplete fields on submit. A disabled control that
+won't say what it wants is a dead end.
+
+*A paid quotation still read "Confirmed" in the portal.* `portal_status` maps
+`QuotationStatus` alone, which never reaches "paid" — that is an invoice state,
+not a quotation one — so a settled order was indistinguishable from one with a
+bill sitting unpaid against it. New `portal_status_for(quotation)` overrides the
+label to **Paid** for a CONFIRMED deal whose bill is settled, and both the list
+and the detail payload now use it. Keyed on CONFIRMED, so earlier stages keep
+their own wording. 3 tests cover it.
+
+---
+
+### Shipping, so the lifecycle actually finishes
+
+Three things reported from the running app, all the same root cause.
+
+**Nothing ever shipped.** `shipped_at` was read in four places and written in
+none: no service set it, no endpoint existed, and `StockMoveReason.SHIP` was
+declared and unused. So the Shipped milestone was unreachable. Downstream of
+that, the invoice stepper showed Shipped grey forever, "Orders Awaiting
+Fulfillment" listed every confirmed order ever placed and could never empty,
+and the delivery-slippage sweep in `insights/health.py` compared `promised_date`
+against a timestamp nothing would ever set.
+
+**The stepper was in the wrong order.** It read Order Confirmed → Shipped →
+Invoiced → Paid, which says goods leave before anyone is billed. With the
+billing work above that is now plainly wrong, and it rendered as a grey step
+sandwiched between two green ones. It is now **Order Confirmed → Invoiced →
+Paid → Shipped**.
+
+| File | Change |
+|---|---|
+| `apps/fulfillment/services.py` | New `mark_shipped()` and `_consume_reservation()`. |
+| `apps/fulfillment/api.py` | `POST /fulfillment/plans/{id}/ship` (Finance/Admin); `billing_state` on `PlanOut`; `orders_awaiting` now excludes SHIPPED plans. |
+| `apps/billing/api.py` | `_lifecycle()` reordered. |
+| `apps/negotiation/services.py` | `portal_shipping()` says "has been despatched from" once it actually has, and mentions a backorder following separately. |
+| `app/(app)/fulfillment/[id]/page.tsx` | **Mark Shipped** action, per-allocation Shipped badge, green SHIPPED status. |
+
+**Shipping is gated on payment**, which is the rule the whole sequence rests on:
+`mark_shipped` refuses an unpaid order outright. Despatch is the one step that
+cannot be taken back, so it is a refusal rather than a warning. `PlanOut` carries
+`billing_state` purely so the screen can disable the button and say *why* instead
+of offering one the service will reject — the same pattern applied to the Finance
+worklist and the portal.
+
+**Reservations are consumed, not just released.** `_reserve` raises
+`quantity_reserved` and leaves `quantity_on_hand` alone, because a reservation is
+a promise rather than a movement. Shipping is the movement, so both drop together
+and a `SHIP` stock move records the delta. Clearing the reservation without
+deducting the stock would hand the same units to the next order.
+
+**A backorder holds the plan open.** A plan with unfilled backordered lines
+reaches `PARTIALLY_SHIPPED`, never `SHIPPED`, so it stays in the fulfillment
+queue — that leftover is exactly what the screen exists to surface — and the
+customer is told the rest follows separately.
+
+Verified: 9 new tests in `apps/fulfillment/tests.py` (`ShippingTests`, the first
+database-backed tests in that file) cover the refusals, the stock arithmetic, the
+queue emptying, the customer wording and the stepper order. 139 backend tests
+pass. Against the dev database, Q-1013/Q-1012/Q-1002 are paid and now offer
+**Mark Shipped**, while Q-1004 is payment-pending and correctly does not.
+
+No migration. `shipped_at`, `FulfillmentStatus.SHIPPED` and `StockMoveReason.SHIP`
+all already existed — they had simply never been wired to anything.
 
 ---
 

@@ -98,19 +98,30 @@ def _get(invoice_id: int) -> Invoice:
 
 
 def _lifecycle(invoice: Invoice) -> list[dict]:
-    """Reconciliation state: nothing is billed before it ships."""
+    """The order lifecycle, in the order it actually happens.
+
+    Confirmed -> invoiced -> paid -> shipped. Shipped used to sit second, which
+    read as though goods went out before anyone had been billed and left the
+    step permanently grey between two green ones — the customer pays first, and
+    despatch is what closes the deal out.
+    """
     quotation = invoice.quotation
     shipped = False
     if quotation:
         plan = quotation.fulfillment_plans.first()
+        # Every non-backordered line has left the warehouse. A plan with an
+        # open backorder is deliberately not "shipped" yet.
         shipped = bool(
-            plan and not plan.allocations.filter(shipped_at__isnull=True, is_backorder=False).exists()
+            plan
+            and not plan.allocations.filter(
+                shipped_at__isnull=True, is_backorder=False
+            ).exists()
         )
     return [
         {"label": "Order Confirmed", "done": quotation is not None},
-        {"label": "Shipped", "done": shipped},
         {"label": "Invoiced", "done": True},
         {"label": "Paid", "done": invoice.status == InvoiceStatus.PAID},
+        {"label": "Shipped", "done": shipped},
     ]
 
 

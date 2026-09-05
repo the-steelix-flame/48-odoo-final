@@ -682,6 +682,38 @@ class BillingFlowTests(PortalTestBase):
         with self.assertRaises(ValidationError):
             negotiation.pay_bill(quotation, actor=self.buyer)
 
+    def test_the_portal_says_paid_once_the_bill_is_settled(self):
+        """Confirmed is about the terms; the customer wants to know whether
+        they still owe anything. A settled order read identically to one with
+        a bill sitting unpaid against it."""
+        quotation = self._confirmed()
+        self.assertEqual(negotiation.portal_status_for(quotation)[0], "Confirmed")
+
+        billing.raise_bill_for_quotation(quotation, actor=self.finance)
+        # Still "Confirmed" — a bill exists, but nothing has been paid yet.
+        self.assertEqual(negotiation.portal_status_for(quotation)[0], "Confirmed")
+
+        negotiation.pay_bill(quotation, actor=self.buyer)
+        self.assertEqual(negotiation.portal_status_for(quotation)[0], "Paid")
+
+    def test_paid_never_asks_the_customer_to_act(self):
+        quotation = self._confirmed()
+        billing.raise_bill_for_quotation(quotation, actor=self.finance)
+        negotiation.pay_bill(quotation, actor=self.buyer)
+
+        label, action_required = negotiation.portal_status_for(quotation)
+        self.assertEqual(label, "Paid")
+        self.assertFalse(action_required)
+
+    def test_only_confirmed_deals_can_read_as_paid(self):
+        """The override is keyed on CONFIRMED, so an earlier stage keeps its own
+        wording no matter what billing says."""
+        quotation = self._quotation()
+        quotations.submit(quotation, actor=self.rep)
+        negotiation.send_to_customer(quotation, actor=self.rep)
+
+        self.assertEqual(negotiation.portal_status_for(quotation)[0], "Awaiting your review")
+
     def test_paying_with_no_bill_raised_is_refused(self):
         """The portal hides the button, but the endpoint is reachable without it."""
         quotation = self._confirmed()

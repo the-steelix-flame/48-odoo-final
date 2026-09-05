@@ -71,6 +71,24 @@ def portal_status(status: str) -> tuple[str, bool]:
     return PORTAL_STATUS_LABELS.get(status, (status.replace("_", " ").title(), False))
 
 
+def portal_status_for(quotation: Quotation) -> tuple[str, bool]:
+    """The status label the customer sees, billing included.
+
+    `portal_status` maps `QuotationStatus` alone, which never reaches "paid" —
+    that's an invoice state, not a quotation one. Without this a CONFIRMED
+    order whose bill has already been settled still read "Confirmed" on the
+    list, indistinguishable from one still waiting on a bill.
+    """
+    label, action_required = portal_status(quotation.status)
+    if quotation.status == QuotationStatus.CONFIRMED:
+        from apps.billing import services as billing
+
+        state, _ = billing.billing_state(quotation)
+        if state == billing.BILLING_PAID:
+            label = "Paid"
+    return label, action_required
+
+
 def assert_portal_user(user):
     """Every portal route resolves the caller through their business."""
     profile = getattr(user, "customer_profile", None)
@@ -137,22 +155,35 @@ def portal_shipping(quotation) -> str | None:
     if plan is None:
         return "Your order is being prepared for despatch."
 
+    allocations = list(plan.allocations.select_related("warehouse"))
     warehouses = sorted(
-        {
-            allocation.warehouse.name
-            for allocation in plan.allocations.select_related("warehouse")
-            if not allocation.is_backorder
-        }
+        {a.warehouse.name for a in allocations if not a.is_backorder}
     )
     if not warehouses:
         return "Your order is being prepared for despatch."
-    if len(warehouses) == 1:
-        return f"Your order is being prepared for despatch from {warehouses[0]}."
-    return (
-        "Your order is being prepared for despatch from "
-        + ", ".join(warehouses[:-1])
-        + f" and {warehouses[-1]}."
+
+    # Once it has actually left the warehouse, say so. Telling a customer their
+    # order is still "being prepared" after it shipped is the same stale claim
+    # in the opposite direction.
+    despatched = all(
+        a.shipped_at is not None for a in allocations if not a.is_backorder
     )
+    verb = "has been despatched from" if despatched else "is being prepared for despatch from"
+
+    if len(warehouses) == 1:
+        summary = f"Your order {verb} {warehouses[0]}."
+    else:
+        summary = (
+            f"Your order {verb} "
+            + ", ".join(warehouses[:-1])
+            + f" and {warehouses[-1]}."
+        )
+
+    # A backorder is the customer's business: the rest has gone, this bit
+    # follows when stock lands.
+    if any(a.is_backorder and a.shipped_at is None for a in allocations):
+        summary += " Some items are awaiting stock and will follow separately."
+    return summary
 
 
 @transaction.atomic

@@ -538,6 +538,9 @@ export interface FulfillmentPlan {
   is_manual_override: boolean;
   /** True once a restock makes an open backorder fillable. */
   consolidation_available: boolean;
+  /** Goods ship after the money arrives, so the screen needs this to explain
+   *  why it cannot ship yet instead of offering a button the API refuses. */
+  billing_state: BillingState;
   allocations: Allocation[];
 }
 

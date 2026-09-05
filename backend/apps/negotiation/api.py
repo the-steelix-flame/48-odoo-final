@@ -236,7 +236,7 @@ def _effective_discount(quotation: Quotation) -> Decimal:
 
 
 def _portal_payload(quotation: Quotation) -> dict:
-    label, action_required = services.portal_status(quotation.status)
+    label, action_required = services.portal_status_for(quotation)
     open_request = services.open_request_for(quotation)
     # A counter waiting on the customer is also "your move", even if the
     # quotation status alone wouldn't say so. Keyed on COUNTERED rather than on
@@ -304,7 +304,7 @@ def portal_list_quotations(request):
     """
     rows = []
     for quotation in services.portal_quotations_for(request.auth):
-        label, action_required = services.portal_status(quotation.status)
+        label, action_required = services.portal_status_for(quotation)
         rows.append(
             {
                 "id": quotation.id,

@@ -99,9 +99,28 @@ export default function CheckoutPage({ params }: { params: Promise<{ id: string 
   const nameOk = name.trim().length > 1;
   const ready = cardOk && expiryOk && cvcOk && nameOk;
 
+  // What's incomplete, in the order the fields appear — so a click that can't
+  // go through says why instead of the button just sitting there greyed out.
+  // A customer who has already tabbed past a field has no other way to find
+  // out it's the one holding things up.
+  function whatsMissing(): string | null {
+    const missing: string[] = [];
+    if (!nameOk) missing.push("the name on the card");
+    if (!cardOk) missing.push("a 16-digit card number");
+    if (!expiryOk) missing.push("a valid expiry date");
+    if (!cvcOk) missing.push("the security code");
+    if (missing.length === 0) return null;
+    return `Check ${missing.join(", ")} before paying.`;
+  }
+
   async function pay(event: React.FormEvent) {
     event.preventDefault();
-    if (!ready || !bill) return;
+    if (!bill) return;
+    const problem = whatsMissing();
+    if (problem) {
+      setFailure(problem);
+      return;
+    }
     setBusy(true);
     setFailure(null);
     try {
@@ -252,7 +271,7 @@ export default function CheckoutPage({ params }: { params: Promise<{ id: string 
 
               <button
                 type="submit"
-                disabled={!ready || busy}
+                disabled={busy}
                 className="w-full rounded-[10px] bg-gradient-to-br from-[#22D3EE] to-[#0891B2] px-[18px] py-[13px] text-[14.5px] font-semibold text-[#062A33] transition hover:from-[#34D399] hover:to-[#059669] hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
               >
                 {busy ? "Processing…" : `Pay ${money(bill.amount_due, bill.currency)}`}
