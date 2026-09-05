@@ -10,7 +10,7 @@ from apps.accounts.auth import internal_auth
 from apps.accounts.models import Customer
 from apps.catalog.models import PriceList, UpsellSuggestionLog
 from apps.catalog.schemas import UpsellSuggestionOut
-from apps.common.enums import QuotationEventType, Role
+from apps.common.enums import QuotationEventType, QuotationStatus, Role
 from apps.common.errors import NotFound, PermissionDenied
 from apps.quotations import services
 from apps.quotations.models import Quotation
@@ -49,8 +49,31 @@ def _detail(quotation: Quotation) -> dict:
         lines=list(quotation.lines.select_related("product", "product__category")),
         risk=services.risk_breakdown(quotation),
         events=list(quotation.events.select_related("actor")),
+        closure=_closure(quotation),
     )
     return data
+
+
+def _closure(quotation: Quotation) -> dict | None:
+    """The decision that ended this deal, or None while it is still live."""
+    from apps.common.enums import Role
+
+    if quotation.status not in (QuotationStatus.REJECTED, QuotationStatus.CANCELLED):
+        return None
+    event = (
+        quotation.events.filter(event_type=QuotationEventType.REJECTED)
+        .select_related("actor")
+        .order_by("-created_at")
+        .first()
+    )
+    actor = event.actor if event else None
+    return {
+        "by_name": (actor.full_name or actor.email) if actor else None,
+        "by_role": actor.role if actor else None,
+        "note": (event.note if event else "") or "",
+        "at": event.created_at if event else None,
+        "by_customer": bool(actor and actor.role == Role.CUSTOMER),
+    }
 
 
 def _get(quotation_id: int) -> Quotation:

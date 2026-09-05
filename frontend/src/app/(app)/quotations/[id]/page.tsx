@@ -40,6 +40,27 @@ import type { Product, QuotationDetail, UpsellSuggestion } from "@/types";
  * handler a click-away would. One code path, so typing 17 and pressing Enter
  * cannot produce a different result from typing 17 and clicking elsewhere.
  */
+/**
+ * Says who actually ended the deal.
+ *
+ * An approver's rejection and a customer's decline both land on REJECTED, so
+ * the status alone cannot tell them apart — announcing "closed by the customer"
+ * on a quote the Sales Manager refused would simply be untrue. The backend
+ * resolves the actor; this only phrases it.
+ */
+function closedReason(data: QuotationDetail): string {
+  const closure = data.closure;
+  if (data.status === "CANCELLED") return "This quotation was cancelled. It can no longer be changed.";
+  if (!closure) return "This quotation is closed. It can no longer be changed.";
+  const who = closure.by_customer
+    ? "the customer"
+    : closure.by_name
+      ? `${closure.by_name}${closure.by_role ? ` (${titleCase(closure.by_role)})` : ""}`
+      : "an approver";
+  const because = closure.note && closure.note !== "na" ? ` Reason given: “${closure.note}”.` : "";
+  return `Quotation closed by ${who}.${because} Reopening it here would revive a deal that was refused — raise a new quotation instead.`;
+}
+
 function commitOnEnter(event: KeyboardEvent<HTMLInputElement>) {
   if (event.key === "Enter") {
     event.preventDefault();
@@ -79,7 +100,14 @@ export default function QuotationBuilderPage({ params }: { params: Promise<{ id:
   if (error) return <ErrorState message={error.message} onRetry={reload} />;
   if (!data) return null;
 
-  const editable = ["DRAFT", "UNDER_NEGOTIATION", "REJECTED"].includes(data.status);
+  // REJECTED is deliberately absent. A closed deal used to open the ordinary
+  // builder - editable quantities, discounts, Submit for Approval - which meant
+  // a quotation the approver or the customer had already refused could be
+  // quietly rebuilt under the same number, with the rejection still sitting in
+  // its own audit trail. The backend now refuses those edits with a 409; this
+  // stops the screen offering them in the first place.
+  const editable = ["DRAFT", "UNDER_NEGOTIATION"].includes(data.status);
+  const closed = ["REJECTED", "CANCELLED"].includes(data.status);
 
   /**
    * A quote locks the moment it leaves the rep's hands. Until now the inputs
@@ -94,7 +122,9 @@ export default function QuotationBuilderPage({ params }: { params: Promise<{ id:
         ? "This quote is approved. Editing a line now would invalidate the approval it was granted on — return it first to make changes."
         : data.status === "SENT"
           ? "This quote is with the customer. They can counter from the portal, which reopens it for edits."
-          : `This quote is ${titleCase(data.status).toLowerCase()} and can no longer be edited.`;
+          : closed
+            ? closedReason(data)
+            : `This quote is ${titleCase(data.status).toLowerCase()} and can no longer be edited.`;
 
   /** Every mutation replaces local state with the backend's recomputed truth. */
   async function run(fn: () => Promise<QuotationDetail>) {
@@ -189,11 +219,31 @@ export default function QuotationBuilderPage({ params }: { params: Promise<{ id:
         </div>
       )}
 
-      {!editable && (
+      {/* A closed deal gets a panel rather than the small read-only note. The
+          note suits "locked for now"; this is "finished", and the difference
+          matters when the alternative is quietly editing a refused quote. */}
+      {closed ? (
+        <div className="mb-4 rounded-[12px] border border-[#FCA5A5] bg-[#FEF2F2] p-[20px]">
+          <div className="flex items-start gap-[12px]">
+            <span className="mt-[6px] block h-[8px] w-[8px] shrink-0 rounded-full bg-[#DC2626]" />
+            <div>
+              <p className="font-heading text-[15px] font-semibold text-[#991B1B]">
+                {data.status === "CANCELLED" ? "Quotation cancelled" : "Quotation closed"}
+              </p>
+              <p className="mt-[4px] text-[13px] leading-[1.5] text-[#7F1D1D]">{lockedReason}</p>
+              {data.closure?.at && (
+                <p className="mt-[8px] font-mono text-[11px] text-[#B91C1C]">
+                  {dateTime(data.closure.at)}
+                </p>
+              )}
+            </div>
+          </div>
+        </div>
+      ) : !editable ? (
         <div className="mb-4">
           <Note>Read-only — {lockedReason}</Note>
         </div>
-      )}
+      ) : null}
 
       <div className="grid gap-6 xl:grid-cols-[2fr_1fr]">
         {/* -------------------------------------------------- cart */}

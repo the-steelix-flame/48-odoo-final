@@ -73,7 +73,9 @@ ALLOWED_TRANSITIONS: dict[str, set[str]] = {
         QuotationStatus.CANCELLED,
     },
     QuotationStatus.CONFIRMED: set(),
-    QuotationStatus.REJECTED: {QuotationStatus.DRAFT},
+    # Terminal. Matches WORKFLOW.md, which has always drawn REJECTED as an end
+    # state; the DRAFT edge let a refused quote be quietly revived in place.
+    QuotationStatus.REJECTED: set(),
     QuotationStatus.CANCELLED: set(),
 }
 
@@ -497,10 +499,14 @@ def assert_editable(quotation: Quotation) -> None:
 
 
 def _assert_editable(quotation: Quotation) -> None:
+    # REJECTED is deliberately NOT here. A closed deal is finished: reopening it
+    # by editing the lines would silently resurrect a quotation the approver or
+    # the customer had already refused, under the same number and with the
+    # rejection still sitting in its audit trail. If the deal is back on, it is a
+    # new quotation.
     editable = {
         QuotationStatus.DRAFT,
         QuotationStatus.UNDER_NEGOTIATION,
-        QuotationStatus.REJECTED,
     }
     if quotation.status not in editable:
         raise InvalidTransition(

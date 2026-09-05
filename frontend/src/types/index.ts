@@ -357,6 +357,18 @@ export interface QuotationDetail extends QuotationSummary {
   lines: QuotationLine[];
   risk: RiskBreakdown;
   events: QuotationEvent[];
+  /** Present only once the quotation is closed. */
+  closure?: Closure | null;
+}
+
+/** Who ended a deal, and what they said. */
+export interface Closure {
+  by_name?: string | null;
+  by_role?: Role | null;
+  note: string;
+  at?: string | null;
+  /** True when it was the customer, not internal staff. */
+  by_customer: boolean;
 }
 
 // ---------------------------------------------------------------- approvals
