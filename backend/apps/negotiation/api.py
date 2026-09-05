@@ -433,10 +433,17 @@ def accept_request(request, request_id: int):
     }
 
 
-@router.post("/internal/requests/{request_id}/reject", auth=internal_auth)
-def reject_request(request, request_id: int, payload: ResolveIn):
-    services.reject_request(_get_request(request_id), actor=request.auth, note=payload.note)
-    return {"ok": True}
+# There is deliberately NO rep-side reject endpoint.
+#
+# A seller declining their own deal is just deleting their own work; the rep's
+# two answers are accept or counter. Walking away belongs to the customer, via
+# POST /api/portal/quotations/{id}/reject.
+#
+# Removed at the API boundary rather than only hidden in the UI, so the rule is
+# actually enforced — a button re-added later gets a 404 and a conversation,
+# instead of silently working. `services.reject_request` survives because it
+# also settles a quote out of UNDER_NEGOTIATION and a test pins that behaviour;
+# nothing routes to it today.
 
 
 def _get_request(request_id: int) -> NegotiationRequest:

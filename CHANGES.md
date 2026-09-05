@@ -950,6 +950,34 @@ The two sides now have the answers that belong to them:
 Reject is the one action with no precondition beyond the quotation being live. Blocking it would
 be the same bug as before, in reverse: the customer stuck with a deal the UI won't let them end.
 
+### Follow-up: the same Reject lived on a second screen
+
+Removing the button from the quotation panel missed the **Negotiation inbox**
+(`/negotiations`), a separate screen built upstream that carried its own
+Accept / Reject / Negotiate row. A rule enforced on one screen and not the
+other is not a rule.
+
+| File | Change |
+|---|---|
+| `app/(app)/negotiations/page.tsx` | Reject button, its confirm-with-reason panel, the `rejecting`/`note` state and the `reject()` handler all removed. Rows now read Accept · Negotiate. |
+| `apps/negotiation/api.py` | `POST /internal/requests/{id}/reject` **deleted**. Removed at the API boundary rather than only hidden, so a button re-added later gets a 404 and a conversation instead of silently working. |
+
+`services.reject_request` survives: it also settles a quote out of
+`UNDER_NEGOTIATION`, and a teammate's test pins that. Nothing routes to it now.
+**@anubhaw0raj / @sinjeki** — if you were planning to use that endpoint, say so
+and we can decide together; the service is still there.
+
+### Follow-up: the portal list undersold what it was for
+
+The row action said **"Review →"**, which reads as "have a look" and hid that a
+decision was waiting; the banner still offered to "ask a question" after
+messaging was removed. The row now reads **"Accept, negotiate or reject →"**
+with the discount underneath it, and the banner names the same three answers.
+`effective_discount_percent` was added to the list payload as well as the
+detail, so the number is on screen before you open anything.
+
+Verified against real data: `Q-1009 — 8.00% off`, `Q-1007 — 10.00% off`.
+
 ### The discount is now stated, not implied
 
 The portal showed a percentage per line, but an order-level discount sits on top of those, so no
