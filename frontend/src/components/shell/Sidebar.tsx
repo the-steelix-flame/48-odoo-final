@@ -72,13 +72,9 @@ export function Sidebar() {
     },
     { href: "/deal-health", label: "Deal Health", badge: health?.alerts.length },
     { href: "/reports", label: "Reports" },
-    {
-      // The catalogue screen, not the product picker — a rep still adds
-      // products to a quotation, which reads the same API.
-      href: "/products",
-      label: "Products",
-      roles: ["FINANCE", "SALES_MANAGER", "ADMIN"],
-    },
+    // Visible to everyone, by team decision. A rep builds quotations out of
+    // this catalogue, so seeing what is in it is part of the job.
+    { href: "/products", label: "Products" },
   ];
 
   /**
