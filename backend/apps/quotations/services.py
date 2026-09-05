@@ -484,6 +484,11 @@ def chain_for(quotation: Quotation) -> list[str]:
     return chain_for_band(quotation.risk_band, list(ApprovalRule.objects.filter(is_active=True)))
 
 
+def assert_editable(quotation: Quotation) -> None:
+    """Public alias — other routers need this guard too."""
+    _assert_editable(quotation)
+
+
 def _assert_editable(quotation: Quotation) -> None:
     editable = {
         QuotationStatus.DRAFT,

@@ -76,7 +76,33 @@ export default function ApprovalsPage() {
                     {row.risk_band} · {row.risk_score}
                   </Badge>
                 </Cell>
-                <Cell>{row.current_stage ? titleCase(row.current_stage) : "—"}</Cell>
+                <Cell>
+                  {row.chain.length === 0 ? (
+                    <span className="text-slate-500">Auto-approved</span>
+                  ) : (
+                    <span className="flex flex-wrap items-center gap-1">
+                      {row.chain.map((role, index) => (
+                        <span key={role} className="flex items-center gap-1">
+                          {index > 0 && <span className="text-slate-600">&rarr;</span>}
+                          <span
+                            className={
+                              index + 1 === row.current_step_number
+                                ? "font-semibold text-amber-300"
+                                : "text-slate-500"
+                            }
+                          >
+                            {titleCase(role)}
+                          </span>
+                        </span>
+                      ))}
+                      {row.total_steps > 1 && row.current_step_number ? (
+                        <span className="ml-1 text-xs text-slate-500">
+                          ({row.current_step_number} of {row.total_steps})
+                        </span>
+                      ) : null}
+                    </span>
+                  )}
+                </Cell>
                 <Cell>{row.assigned_to ?? "—"}</Cell>
                 <Cell>
                   <Badge

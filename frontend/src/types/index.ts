@@ -261,6 +261,15 @@ export interface ApprovalRow {
   current_stage?: Role | null;
   assigned_to?: string | null;
   created_at: string;
+  /**
+   * The FULL ordered approval chain, e.g. ["SALES_MANAGER", "FINANCE"].
+   * Screen 5 previously showed only `current_stage`, so a HIGH-risk quote read
+   * as "Sales Manager" and Finance looked like it was never involved — even
+   * though the brief requires HIGH to be Sales Manager THEN Finance.
+   */
+  chain: Role[];
+  current_step_number?: number | null;
+  total_steps: number;
 }
 
 export interface ApprovalDetail extends ApprovalRow {
