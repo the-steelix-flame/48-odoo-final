@@ -15,6 +15,7 @@ from apps.quotations import services
 from apps.quotations.models import Quotation
 from apps.quotations.schemas import (
     AddLineIn,
+    ConfirmOut,
     CreateQuotationIn,
     OrderDiscountIn,
     QuotationDetailOut,
@@ -152,7 +153,7 @@ def submit_quotation(request, quotation_id: int):
     return _detail(quotation)
 
 
-@router.post("/{quotation_id}/confirm")
+@router.post("/{quotation_id}/confirm", response=ConfirmOut)
 def confirm_quotation(request, quotation_id: int):
     """Confirm the order: plan the split, start subscriptions, issue invoices.
 
