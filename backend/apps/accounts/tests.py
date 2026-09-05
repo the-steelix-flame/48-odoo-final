@@ -266,6 +266,70 @@ class StaffProvisioningTests(TestCase):
         self.assertFalse(rep.is_staff)
 
 
+class ChangeOwnPasswordTests(TestCase):
+    """Distinct from an admin reset: here the current password IS the proof."""
+
+    def setUp(self):
+        from apps.accounts import staff
+
+        self.result = staff.create_account(
+            email="self@x.test", full_name="Self Serve", role=Role.SALES_REP
+        )
+        self.user = self.result.user
+
+    def test_changing_with_the_right_current_password_works(self):
+        from apps.accounts import staff
+
+        staff.change_own_password(
+            self.user, current_password=self.result.password, new_password="brand-new-pass"
+        )
+        reloaded = User.objects.get(pk=self.user.pk)
+        self.assertTrue(reloaded.check_password("brand-new-pass"))
+        self.assertFalse(reloaded.check_password(self.result.password))
+
+    def test_a_wrong_current_password_is_refused(self):
+        """Otherwise anyone at an unlocked screen could lock the owner out."""
+        from apps.accounts import staff
+
+        with self.assertRaises(ValidationError) as ctx:
+            staff.change_own_password(
+                self.user, current_password="not-it", new_password="brand-new-pass"
+            )
+        self.assertIn("not correct", str(ctx.exception))
+        self.assertTrue(
+            User.objects.get(pk=self.user.pk).check_password(self.result.password)
+        )
+
+    def test_too_short_is_refused(self):
+        from apps.accounts import staff
+
+        with self.assertRaises(ValidationError):
+            staff.change_own_password(
+                self.user, current_password=self.result.password, new_password="short"
+            )
+
+    def test_reusing_the_same_password_is_refused(self):
+        from apps.accounts import staff
+
+        with self.assertRaises(ValidationError):
+            staff.change_own_password(
+                self.user,
+                current_password=self.result.password,
+                new_password=self.result.password,
+            )
+
+    def test_the_new_password_actually_authenticates(self):
+        from django.contrib.auth import authenticate
+
+        from apps.accounts import staff
+
+        staff.change_own_password(
+            self.user, current_password=self.result.password, new_password="brand-new-pass"
+        )
+        self.assertIsNotNone(authenticate(username="self@x.test", password="brand-new-pass"))
+        self.assertIsNone(authenticate(username="self@x.test", password=self.result.password))
+
+
 class UserAnalyticsTests(TestCase):
     def test_analytics_are_role_appropriate(self):
         from apps.accounts import analytics, staff

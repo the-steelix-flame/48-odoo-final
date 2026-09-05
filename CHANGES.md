@@ -1009,6 +1009,46 @@ write to and the rep cannot answer is a trap.
 
 ---
 
+### A customer profile, and one Back control for the whole app
+
+**Profile** (`/portal/profile`). Split deliberately into two halves: the account
+details are **read-only** and the password is not. Business name, pricing tier and
+account manager are ours to set — a customer able to edit their own tier would be
+editing their own discount ceiling. What they get is their sign-in email, contact
+address, account manager, member-since, last sign-in, and how many quotations
+they've received and confirmed.
+
+| File | Change |
+|---|---|
+| `apps/accounts/staff.py` | New `change_own_password()`. Distinct from the admin `reset_password()`: that one acts on someone else's account and *cannot* ask for the old password, so here the current password **is** the proof of identity — without checking it, anyone at an unlocked screen could lock the real owner out. Also enforces a minimum length and refuses a no-op reuse. |
+| `apps/negotiation/services.py` | `portal_profile()` and `assert_portal_user()`. Received-count comes from `PortalToken`, not from the customer's quotations, so drafts they were never sent are not counted. |
+| `apps/negotiation/api.py` | `GET /api/portal/profile`, `POST /api/portal/profile/password`. |
+| `app/portal/profile/page.tsx` | **New.** Read-only account card beside the password form. |
+| `app/portal/layout.tsx` | Profile is now a real nav item — it was one of the dead `<span>`s removed earlier. |
+
+Verified: wrong current password, too short, and reuse are each refused with their
+own message; a valid change works, the new password authenticates and the old one
+stops; a `SALES_REP` gets 403 on the portal profile.
+
+**Back.** Lives in `PageHeader`, above the title. Every screen already renders a
+`PageHeader` — 21 of 25 pages, and the four that don't are the dashboard, login and
+two redirects, none of which want one — so it lands in the same place everywhere for
+free and cannot drift as pages are added. `hideBack` opts out.
+
+It uses `router.back()` rather than a computed parent path, because arriving at a
+quotation from the negotiation inbox should return you to the inbox, not to the
+quotations list.
+
+The interesting part is when it appears. `window.history.length` is no use: it counts
+everything the tab ever visited, so on the first screen after login it would offer to
+go "back" to `/login`, which immediately redirects forward again — a button that
+visibly does nothing. `NavigationProvider` (`lib/navigation.tsx`) therefore mounts
+**per authenticated shell**, never at the root, and only counts navigations that
+happen inside one. Land directly on a shared portal link and there is no Back button,
+which is correct: there is nothing in-app behind you.
+
+---
+
 ## 7. Migrations added by this lane
 
 Anyone pulling this must run `python manage.py migrate`:

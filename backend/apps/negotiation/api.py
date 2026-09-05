@@ -122,6 +122,32 @@ class PortalQuotationOut(Schema):
     open_request: PortalRequestOut | None = None
 
 
+class PortalProfileOut(Schema):
+    """The customer's own account, as they see it.
+
+    Read-only apart from the password: the business name, tier and account
+    manager are ours to set, not theirs to edit — a customer promoting
+    themselves to Gold would rewrite their own discount ceiling.
+    """
+
+    login_email: str
+    display_name: str
+    company_name: str
+    tier: str
+    currency: str
+    contact_email: str
+    account_manager: str | None = None
+    member_since: datetime | None = None
+    last_login: datetime | None = None
+    quotations_received: int
+    quotations_confirmed: int
+
+
+class ChangePasswordIn(Schema):
+    current_password: str
+    new_password: str
+
+
 class SubmitRequestIn(Schema):
     requested_discount_percent: Decimal | None = None
     requested_delivery_date: date | None = None
@@ -210,6 +236,26 @@ def _portal_payload(quotation: Quotation) -> dict:
         "requests": list(quotation.negotiation_requests.all()),
         "open_request": open_request,
     }
+
+
+@router.get("/profile", response=PortalProfileOut, auth=any_auth)
+def portal_profile(request):
+    """The signed-in customer's own account."""
+    return services.portal_profile(request.auth)
+
+
+@router.post("/profile/password", auth=any_auth)
+def portal_change_password(request, payload: ChangePasswordIn):
+    """Change your own password. The current one is the proof of identity."""
+    from apps.accounts import staff
+
+    services.assert_portal_user(request.auth)
+    staff.change_own_password(
+        request.auth,
+        current_password=payload.current_password,
+        new_password=payload.new_password,
+    )
+    return {"ok": True, "detail": "Your password has been changed."}
 
 
 @router.get("/quotations", response=list[PortalQuotationRowOut], auth=any_auth)

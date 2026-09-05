@@ -71,6 +71,48 @@ def portal_status(status: str) -> tuple[str, bool]:
     return PORTAL_STATUS_LABELS.get(status, (status.replace("_", " ").title(), False))
 
 
+def assert_portal_user(user):
+    """Every portal route resolves the caller through their business."""
+    profile = getattr(user, "customer_profile", None)
+    if profile is None:
+        raise PermissionDenied("This area is for customer accounts")
+    return profile
+
+
+def portal_profile(user) -> dict:
+    """The customer's own account.
+
+    Everything here except the password is read-only: the business name, tier
+    and account manager are ours to set. A customer able to edit their own tier
+    would be editing their own discount ceiling.
+    """
+    profile = assert_portal_user(user)
+    quotations = Quotation.objects.filter(customer=profile)
+    return {
+        "login_email": user.email,
+        "display_name": user.full_name or user.email,
+        "company_name": profile.name,
+        "tier": profile.tier,
+        "currency": profile.currency,
+        "contact_email": profile.contact_email,
+        "account_manager": (
+            profile.owner_rep.full_name or profile.owner_rep.email
+            if profile.owner_rep_id
+            else None
+        ),
+        "member_since": user.date_joined,
+        "last_login": user.last_login,
+        # Only what was actually sent to them; drafts stay private.
+        "quotations_received": PortalToken.objects.filter(customer=profile)
+        .values("quotation_id")
+        .distinct()
+        .count(),
+        "quotations_confirmed": quotations.filter(
+            status=QuotationStatus.CONFIRMED
+        ).count(),
+    }
+
+
 def portal_quotations_for(user) -> list[Quotation]:
     """Every quotation this customer has been SENT, newest first.
 

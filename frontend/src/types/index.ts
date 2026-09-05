@@ -647,6 +647,21 @@ export interface NegotiationView {
   requests: PortalRequest[];
 }
 
+/** The customer's own account. Read-only apart from the password. */
+export interface PortalProfile {
+  login_email: string;
+  display_name: string;
+  company_name: string;
+  tier: CustomerTier;
+  currency: string;
+  contact_email: string;
+  account_manager?: string | null;
+  member_since?: string | null;
+  last_login?: string | null;
+  quotations_received: number;
+  quotations_confirmed: number;
+}
+
 /** One row of the customer's quotation list. Deliberately thin. */
 export interface PortalQuotationRow {
   id: number;
