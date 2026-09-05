@@ -201,3 +201,92 @@ def check_backorders(item: StockItem) -> int:
             alloc.plan.save(update_fields=["consolidation_available", "updated_at"])
             flagged += 1
     return flagged
+
+
+def _recost(plan: FulfillmentPlan) -> None:
+    """Recompute shipments and cost from whatever allocations now exist.
+
+    Backordered rows don't ship yet, so they cost nothing and count for nothing.
+    """
+    warehouses_used = set(
+        plan.allocations.filter(is_backorder=False).values_list("warehouse_id", flat=True)
+    )
+    plan.estimated_shipments = len(warehouses_used)
+    plan.estimated_cost = sum(
+        (
+            Decimal(w.base_shipment_cost) * Decimal(w.shipping_cost_weight)
+            for w in Warehouse.objects.filter(id__in=warehouses_used)
+        ),
+        Decimal("0"),
+    )
+
+
+@transaction.atomic
+def consolidate_backorders(plan: FulfillmentPlan, *, actor=None) -> FulfillmentPlan:
+    """Re-plan ONLY the backordered allocations against current stock.
+
+    Called when restocking has set `consolidation_available`. Everything already
+    allocated and reserved is left strictly alone — we never unreserve stock a
+    customer is already promised, because that would let one order's
+    consolidation quietly steal from another's reservation.
+    """
+    open_backorders = list(
+        plan.allocations.filter(is_backorder=True, shipped_at__isnull=True).select_related(
+            "quotation_line"
+        )
+    )
+    if not open_backorders:
+        raise ValidationError("This plan has no open backorder to consolidate")
+
+    # One demand per backordered allocation, re-planned from scratch.
+    demands = [
+        Demand(
+            line_id=alloc.quotation_line_id,
+            product_id=alloc.quotation_line.product_id,
+            variant_id=alloc.quotation_line.variant_id,
+            quantity=alloc.quantity,
+            unit_value=Decimal(alloc.quotation_line.unit_price),
+        )
+        for alloc in open_backorders
+    ]
+    result = plan_split(demands, _warehouse_stock())
+
+    if all(alloc.is_backorder for alloc in result.allocations):
+        # Restock wasn't enough after all. Clear the flag so the prompt stops
+        # lying to the user, and say so plainly.
+        plan.consolidation_available = False
+        plan.save(update_fields=["consolidation_available", "updated_at"])
+        raise InsufficientStock(
+            "Stock is still short — there is nothing to consolidate yet",
+            warehouse_id=None,
+            requested=sum(d.quantity for d in demands),
+            available=0,
+        )
+
+    # The plan had already been accepted, so newly-filled rows must be reserved
+    # now to match the rows that were reserved at acceptance time.
+    should_reserve = plan.accepted_at is not None
+
+    for alloc in open_backorders:
+        alloc.delete()
+
+    for row in result.allocations:
+        if row.warehouse_id == 0:
+            continue  # "Unassigned" placeholder — no warehouse configured
+        created = FulfillmentAllocation.objects.create(
+            plan=plan,
+            quotation_line_id=row.line_id,
+            warehouse_id=row.warehouse_id,
+            quantity=row.quantity,
+            is_backorder=row.is_backorder,
+        )
+        if should_reserve and not row.is_backorder:
+            _reserve(created, actor=actor)
+
+    still_short = plan.allocations.filter(is_backorder=True).exists()
+    _recost(plan)
+    plan.consolidation_available = False
+    if plan.accepted_at is not None:
+        plan.status = FulfillmentStatus.BACKORDER if still_short else FulfillmentStatus.ACCEPTED
+    plan.save()
+    return plan

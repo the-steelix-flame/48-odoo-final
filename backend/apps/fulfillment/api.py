@@ -188,6 +188,17 @@ def override_plan(request, plan_id: int, payload: OverrideIn):
     )
 
 
+@router.post("/plans/{plan_id}/consolidate", response=PlanOut)
+def consolidate_plan(request, plan_id: int):
+    """Consolidate Remaining Backorder — re-plans only the backordered rows.
+
+    Only reachable once a RESTOCK has set `consolidation_available`; the prompt
+    exists because stock arrived, not because someone refreshed.
+    """
+    require_role(request, Role.FINANCE, Role.SALES_MANAGER)
+    return services.consolidate_backorders(_get_plan(plan_id), actor=request.auth)
+
+
 @router.post("/stock/{stock_item_id}/restock", response=StockRowOut)
 def restock(request, stock_item_id: int, payload: RestockIn):
     """Receive stock. Fires the backorder-consolidation check as a side effect."""
