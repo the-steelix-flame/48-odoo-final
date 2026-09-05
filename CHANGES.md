@@ -763,6 +763,18 @@ the line was rewritten to 12% — and was updated to assert the order discount p
 `test_accepting_our_counter_never_cuts_a_deeper_line` is the new regression test: an 18% line, a 12%
 counter, and an assertion that the line is still 18% afterwards.
 
+### Per-line comment boxes removed from the portal
+
+"Your decision" repeated the line table that sits directly above it — description and discount, per
+row — purely to hang an "Add a comment about this line…" input off each one. A customer disputing a
+price disputes the order, not line 3; the single **Message** field in the same card already carries
+that, and it is the field the rep's inbox actually surfaces.
+
+Frontend only. `SubmitRequestIn.line_comments` defaults to `[]`, so the portal just stops sending
+the key — the endpoint, the `quotation_line_id` column on `NegotiationMessage` and the thread's
+line-scoped rendering are all untouched, and a rep-side annotation UI could use them with no backend
+change.
+
 ---
 
 ## 2. What this is NOT (scope decision)

@@ -45,7 +45,6 @@ export default function PortalQuotationPage({ params }: { params: Promise<{ id: 
   const [counterDiscount, setCounterDiscount] = useState("");
   const [deliveryDate, setDeliveryDate] = useState("");
   const [message, setMessage] = useState("");
-  const [lineComment, setLineComment] = useState<Record<number, string>>({});
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [confirmNotice, setConfirmNotice] = useState<string | null>(null);
@@ -86,22 +85,16 @@ export default function PortalQuotationPage({ params }: { params: Promise<{ id: 
     setBusy(true);
     setActionError(null);
     try {
-      const lineComments = Object.entries(lineComment)
-        .filter(([, body]) => body.trim())
-        .map(([lineId, body]) => ({ quotation_line_id: Number(lineId), body }));
-
       setData(
         await post<PortalQuotation>(`/portal/quotations/${id}/requests`, {
           requested_discount_percent: counterDiscount || null,
           requested_delivery_date: deliveryDate || null,
           message,
-          line_comments: lineComments,
         }),
       );
       setCounterDiscount("");
       setDeliveryDate("");
       setMessage("");
-      setLineComment({});
     } catch (err) {
       setActionError(err instanceof ApiError ? err.message : "Could not submit your request");
     } finally {
@@ -230,28 +223,14 @@ export default function PortalQuotationPage({ params }: { params: Promise<{ id: 
             </span>
           </div>
 
-          <div className="space-y-3">
-            {data.lines.map((line) => (
-              <div key={line.id} className="grid gap-2 sm:grid-cols-[200px_1fr] sm:items-center">
-                <span className="text-sm text-[#475569]">
-                  {line.description}
-                  <span className="ml-2 text-xs text-[#94A3B8]">
-                    {percent(line.discount_percent, 0)} off
-                  </span>
-                </span>
-                <input
-                  className={inputClass}
-                  placeholder="Add a comment about this line…"
-                  value={lineComment[line.id] ?? ""}
-                  onChange={(e) =>
-                    setLineComment({ ...lineComment, [line.id]: e.target.value })
-                  }
-                />
-              </div>
-            ))}
-          </div>
+          {/* The per-line comment boxes were removed. They restated the line
+              table directly above them just to hang an input off each row, and
+              a customer arguing a price argues about the order, not line 3 —
+              the one "Message" field below carries that. The endpoint still
+              accepts `line_comments`, so a rep-side annotation UI can use it
+              without a backend change. */}
 
-          <div className="mt-5 grid gap-4 sm:grid-cols-2">
+          <div className="grid gap-4 sm:grid-cols-2">
             <Field label="Counter Discount %">
               <input
                 type="number"
