@@ -12,7 +12,8 @@ from decimal import Decimal
 
 from ninja import Router, Schema
 
-from apps.accounts.auth import any_auth, internal_auth
+from apps.accounts.auth import any_auth, internal_auth, require_role
+from apps.common.enums import Role
 from apps.common.errors import NotFound
 from apps.negotiation import services
 from apps.negotiation.models import NegotiationRequest
@@ -417,6 +418,12 @@ def portal_confirm(request, quotation_id: int):
 # --------------------------------------------------------------------------
 # Internal routes — the rep's side of the same conversation
 # --------------------------------------------------------------------------
+#: Negotiating is the rep's job, and only the rep's. A Sales Manager or Finance
+#: user governs the deal — they approve or refuse the terms the rep brings them
+#: — and haggling directly with the customer would put them on both sides of
+#: their own approval. Reading the conversation stays open to every internal
+#: role, because an approver has to see what was said to judge it.
+MAY_NEGOTIATE = (Role.SALES_REP,)
 @router.post("/internal/quotations/{quotation_id}/send", auth=internal_auth)
 def send_to_customer(request, quotation_id: int):
     """Mint the portal link and move the quote to SENT."""
@@ -502,6 +509,7 @@ def counter_request(request, request_id: int, payload: CounterIn):
     Nothing is applied to the quotation yet — the discount only lands if the
     customer accepts, which keeps the quoted figures honest mid-haggle.
     """
+    require_role(request, *MAY_NEGOTIATE)
     negotiation_request = _get_request(request_id)
     services.counter_request(
         negotiation_request,
@@ -534,6 +542,7 @@ def accept_request(request, request_id: int):
     which answered 405. The accept had already succeeded by then, so the deal
     moved while the screen showed an error.
     """
+    require_role(request, *MAY_NEGOTIATE)
     negotiation_request = _get_request(request_id)
     quotation = services.accept_request(negotiation_request, actor=request.auth)
     return _negotiation_payload(quotation)

@@ -54,7 +54,16 @@ export function Sidebar() {
     // no way to tell which one it had left out.
     { href: "/quotations", label: "Quotations", badge: quotations?.length },
     { href: "/approvals", label: "Approvals", badge: approvals?.pending },
-    { href: "/negotiations", label: "Negotiations", badge: negotiations?.length },
+    // Negotiating is the rep's job, and only the rep's. A Sales Manager or
+    // Finance user governs the deal — they approve or refuse the terms the rep
+    // brings them — so haggling directly with the customer would put them on
+    // both sides of their own approval. The API agrees.
+    {
+      href: "/negotiations",
+      label: "Negotiations",
+      badge: negotiations?.length,
+      roles: ["SALES_REP", "ADMIN"],
+    },
     {
       href: "/fulfillment",
       label: "Fulfillment",

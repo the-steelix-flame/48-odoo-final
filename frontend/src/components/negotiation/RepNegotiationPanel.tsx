@@ -24,8 +24,18 @@ import {
   inputClass,
 } from "@/components/ui";
 import { percent } from "@/lib/format";
+import { useAuth } from "@/lib/auth";
 import { useApi } from "@/lib/useApi";
-import type { NegotiationView } from "@/types";
+import type { NegotiationView, Role } from "@/types";
+
+/**
+ * Mirrors `MAY_NEGOTIATE` on the API. A Sales Manager or Finance user governs
+ * the deal — they approve or refuse the terms the rep brings them — so
+ * haggling directly with the customer would put them on both sides of their
+ * own approval. They still READ the thread here, because an approver has to
+ * see what was said in order to judge it.
+ */
+const MAY_NEGOTIATE: Role[] = ["SALES_REP", "ADMIN"];
 
 export function RepNegotiationPanel({
   quotationId,
@@ -39,6 +49,8 @@ export function RepNegotiationPanel({
   const [counterNote, setCounterNote] = useState("");
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const { role } = useAuth();
+  const mayNegotiate = role !== null && MAY_NEGOTIATE.includes(role);
 
   const { data, error, loading, reload, setData } = useApi<NegotiationView>(
     `/portal/internal/quotations/${quotationId}/negotiation`,
@@ -113,6 +125,15 @@ export function RepNegotiationPanel({
               : `${data.customer_name} has sent a request.`}
           </p>
 
+          {/* Approvers see the ask and the thread, but answering it is the
+              rep's move — the API refuses it for anyone else, so the panel
+              says so rather than offering controls that 403. */}
+          {!mayNegotiate ? (
+            <p className="mt-3 text-sm text-[#92400E]">
+              The account manager answers this. Your decision on these terms is made in
+              Approvals, not here.
+            </p>
+          ) : (
           <div className="mt-4 grid gap-4 lg:grid-cols-2">
             <div>
               <Field
@@ -185,13 +206,16 @@ export function RepNegotiationPanel({
               </p>
             </div>
           </div>
+          )}
 
-          <div className="mt-4">
-            <Note>
-              Accepting applies the discount to every line and re-scores the quotation — if the new
-              terms breach a ceiling it re-enters approval automatically.
-            </Note>
-          </div>
+          {mayNegotiate && (
+            <div className="mt-4">
+              <Note>
+                Accepting applies the discount to every line and re-scores the quotation — if the
+                new terms breach a ceiling it re-enters approval automatically.
+              </Note>
+            </div>
+          )}
         </div>
       )}
 

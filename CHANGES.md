@@ -1322,6 +1322,76 @@ was about the portal, but the cause was not specific to it.
 
 ---
 
+### Negotiating is the rep's job, and only the rep's
+
+A Sales Manager and a Finance user could both open the negotiation inbox and
+answer a customer's counter-offer directly. That puts an approver on both sides
+of their own approval: they haggle the terms, then sign off the terms they
+haggled. Their decision on a deal belongs in Approvals.
+
+| File | Change |
+|---|---|
+| `apps/negotiation/api.py` | `MAY_NEGOTIATE = (Role.SALES_REP,)`, enforced on `accept_request` and `counter_request`. ADMIN is implicit in `require_role`. |
+| `components/shell/Sidebar.tsx` | The Negotiations item is gated to Sales Rep and Admin. |
+| `app/(app)/negotiations/layout.tsx` | **New.** `RoleGuard`, because hiding a link is not access control — the URL still resolves if typed. |
+| `components/negotiation/RepNegotiationPanel.tsx` | Accept and counter are replaced, for other roles, by a line saying where their decision actually gets made. |
+
+Reading the thread stays open to every internal role, deliberately: an approver
+has to see what was said in order to judge it. Only acting on it is restricted.
+
+7 tests cover it, including that a rep and an admin can still accept, and that
+an approver can still read.
+
+---
+
+### The 28.6% on Q-1014, and two records that had drifted
+
+Reported from the portal: a deal negotiated at **17%** was showing the customer
+**28.6%**.
+
+This is the compounding bug anubhaw0raj fixed in `300bd46` (merged above):
+`accept_request` used to write the agreed figure straight onto
+`order_discount_percent`, which stacks on top of whatever the lines already
+carry. Q-1014 has a 14% line discount, so an agreed 17% came out at 28.62%.
+The current code derives the order-level percentage instead — for Q-1014 that
+is 3.49%, which produces exactly 17.00% overall.
+
+So the code was already right; **Q-1014 was a stale record written before the
+merge.** Two such records existed and both have been repaired in place:
+
+| Quote | Agreed | Was showing | Now | Status when repaired |
+|---|---|---|---|---|
+| Q-1014 | 17% | 28.62% | 17.00% | SENT |
+| Q-1011 | 8% | 14.44% | 8.00% | PENDING_APPROVAL |
+
+Neither was confirmed, invoiced or paid, so this is a correction rather than a
+credit note. **Q-1010 was checked and deliberately left alone**: it looks
+drifted against the customer's *asking* figure of 20%, but the rep countered 2%
+and the customer accepted that counter, so 2% is the agreed number and the
+record is correct.
+
+---
+
+### A revised offer now reads differently to each side
+
+The thread showed both parties the same sentence — "Quotation sent for your
+review" — for every send, including one that follows a whole negotiation. So
+neither side learned from the timeline that the terms had actually changed, and
+the rep's own screen described their revised offer in words written for the
+customer.
+
+`Thread.tsx` now derives this. A `SENT` entry preceded by any counter-offer,
+rep counter or acceptance is a **revised** offer, badged as such, and reads:
+
+- **Rep:** "Revised terms sent to the customer, following the internal review of this negotiation."
+- **Customer:** "Your account manager has come back with revised terms following your request. The updated figures are shown above."
+
+Derived at render rather than stored, for exactly the reason the author label
+already is: the event log records what happened, and each audience is told
+about it in its own words. The opening send is untouched.
+
+---
+
 ## 7. Migrations added by this lane
 
 Anyone pulling this must run `python manage.py migrate`:

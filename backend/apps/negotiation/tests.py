@@ -23,6 +23,7 @@ from apps.common.enums import (
 )
 from apps.common.errors import NotFound, PermissionDenied, ValidationError
 from apps.governance.models import CategoryDiscountCeiling, TierDiscountCeiling
+from apps.negotiation import api as negotiation_api
 from apps.negotiation import services as negotiation
 from apps.quotations import services as quotations
 
@@ -840,6 +841,92 @@ class BillingFlowTests(PortalTestBase):
         quotation = self._confirmed()
         with self.assertRaises(ValidationError):
             negotiation.pay_bill(quotation, actor=self.buyer)
+
+
+class NegotiationRoleTests(PortalTestBase):
+    """Negotiating is the rep's job, and only the rep's.
+
+    A Sales Manager or Finance user governs the deal — they approve or refuse
+    the terms the rep brings them — so haggling directly with the customer
+    would put them on both sides of their own approval.
+    """
+
+    class _Request:
+        """The two attributes `require_role` actually reads."""
+
+        def __init__(self, user):
+            self.auth = user
+
+    def setUp(self):
+        super().setUp()
+        self.manager = User.objects.create_user(
+            email="mgr@role.test", password="x", full_name="Mgr", role=Role.SALES_MANAGER
+        )
+        self.finance = User.objects.create_user(
+            email="fin@role.test", password="x", full_name="Fin", role=Role.FINANCE
+        )
+        self.admin = User.objects.create_user(
+            email="adm@role.test", password="x", full_name="Adm", role=Role.ADMIN
+        )
+
+    def _open_request(self):
+        quotation = self._quotation()
+        quotations.submit(quotation, actor=self.rep)
+        negotiation.send_to_customer(quotation, actor=self.rep)
+        return negotiation.submit_request(
+            quotation, actor=self.buyer, requested_discount_percent=Decimal("12")
+        )
+
+    def test_a_sales_manager_cannot_accept_a_counter_offer(self):
+        request = self._open_request()
+        with self.assertRaises(PermissionDenied):
+            negotiation_api.accept_request(self._Request(self.manager), request.id)
+
+    def test_finance_cannot_accept_a_counter_offer(self):
+        request = self._open_request()
+        with self.assertRaises(PermissionDenied):
+            negotiation_api.accept_request(self._Request(self.finance), request.id)
+
+    def test_a_sales_manager_cannot_send_a_counter_offer(self):
+        request = self._open_request()
+        with self.assertRaises(PermissionDenied):
+            negotiation_api.counter_request(
+                self._Request(self.manager),
+                request.id,
+                negotiation_api.CounterIn(counter_discount_percent=Decimal("8"), note=""),
+            )
+
+    def test_finance_cannot_send_a_counter_offer(self):
+        request = self._open_request()
+        with self.assertRaises(PermissionDenied):
+            negotiation_api.counter_request(
+                self._Request(self.finance),
+                request.id,
+                negotiation_api.CounterIn(counter_discount_percent=Decimal("8"), note=""),
+            )
+
+    def test_the_rep_can_still_accept(self):
+        request = self._open_request()
+        negotiation_api.accept_request(self._Request(self.rep), request.id)
+        request.refresh_from_db()
+        self.assertEqual(request.status, NegotiationRequestStatus.ACCEPTED)
+
+    def test_an_admin_can_still_accept(self):
+        """`require_role` treats ADMIN as allowed everywhere, deliberately."""
+        request = self._open_request()
+        negotiation_api.accept_request(self._Request(self.admin), request.id)
+        request.refresh_from_db()
+        self.assertEqual(request.status, NegotiationRequestStatus.ACCEPTED)
+
+    def test_reading_the_conversation_stays_open_to_approvers(self):
+        """An approver has to see what was said in order to judge it — only
+        ACTING on it is the rep's."""
+        request = self._open_request()
+        payload = negotiation_api.get_negotiation(
+            self._Request(self.manager), request.quotation_id
+        )
+        self.assertEqual(payload["quotation_id"], request.quotation_id)
+        self.assertTrue(payload["timeline"])
 
 
 class PortalIsolationTests(PortalTestBase):
