@@ -7,8 +7,12 @@
  *
  * The portal lets a customer counter. Until now nothing on the internal side
  * ever showed those counters — `GET /portal/internal/requests` and its
- * accept/reject endpoints existed with no screen in front of them, so the
- * second half of the negotiation loop could only be demoed with curl.
+ * accept endpoint existed with no screen in front of them, so the second
+ * half of the negotiation loop could only be demoed with curl.
+ *
+ * There is no Reject here: a seller declining their own deal is just
+ * deleting their own work. The rep's two answers are accept or counter;
+ * walking away belongs to the customer, in the portal.
  *
  * The headline behaviour is on accept: the counter is written through the
  * normal quotation service, which re-runs the risk engine, which may reopen
@@ -29,13 +33,11 @@ import {
   Cell,
   EmptyState,
   ErrorState,
-  Field,
   Loading,
   Note,
   PageHeader,
   Row,
   Table,
-  inputClass,
 } from "@/components/ui";
 import { dateTime, date as fmtDate, percent, titleCase } from "@/lib/format";
 import { useApi } from "@/lib/useApi";
@@ -52,8 +54,6 @@ export default function NegotiationInboxPage() {
   const router = useRouter();
   const [openOnly, setOpenOnly] = useState(true);
   const [busyId, setBusyId] = useState<number | null>(null);
-  const [rejecting, setRejecting] = useState<number | null>(null);
-  const [note, setNote] = useState("");
   const [message, setMessage] = useState<string | null>(null);
   const [outcome, setOutcome] = useState<NegotiationAcceptResult | null>(null);
 
@@ -89,22 +89,6 @@ export default function NegotiationInboxPage() {
     }
   }
 
-  async function reject(row: InternalNegotiationRequest) {
-    setBusyId(row.id);
-    setMessage(null);
-    setOutcome(null);
-    try {
-      await post(`/portal/internal/requests/${row.id}/reject`, { note });
-      setMessage(`Rejected ${row.quotation_number}. The customer sees your reason in the portal.`);
-      setRejecting(null);
-      setNote("");
-      await reload();
-    } catch (err) {
-      setMessage(err instanceof ApiError ? err.message : "Could not reject the counter-offer");
-    } finally {
-      setBusyId(null);
-    }
-  }
 
   return (
     <>
@@ -207,36 +191,6 @@ export default function NegotiationInboxPage() {
                 <Cell>
                   {row.status !== "SUBMITTED" ? (
                     <span className="text-[12px] text-[#94A3B8]">Resolved</span>
-                  ) : rejecting === row.id ? (
-                    <div className="w-[220px] space-y-2">
-                      <Field label="Reason (the customer sees this)">
-                        <input
-                          className={inputClass}
-                          value={note}
-                          autoFocus
-                          placeholder="Below our Gold floor"
-                          onChange={(event) => setNote(event.target.value)}
-                        />
-                      </Field>
-                      <div className="flex gap-2">
-                        <Button
-                          variant="danger"
-                          disabled={busyId === row.id}
-                          onClick={() => void reject(row)}
-                        >
-                          {busyId === row.id ? "Rejecting…" : "Confirm reject"}
-                        </Button>
-                        <Button
-                          variant="secondary"
-                          onClick={() => {
-                            setRejecting(null);
-                            setNote("");
-                          }}
-                        >
-                          Cancel
-                        </Button>
-                      </div>
-                    </div>
                   ) : (
                     <div className="flex flex-wrap gap-2">
                       <Button
@@ -246,14 +200,14 @@ export default function NegotiationInboxPage() {
                       >
                         {busyId === row.id ? "Accepting…" : "Accept"}
                       </Button>
-                      <Button variant="secondary" onClick={() => setRejecting(row.id)}>
-                        Reject
-                      </Button>
-                      {/* Accept and Reject are the whole of this row's vocabulary,
-                          but a counter-offer is the third answer and there is no
-                          room for it in a table cell — it needs the thread, the
-                          line breakdown and a number. This opens the quotation,
-                          where the same accept/decline live alongside it. */}
+                      {/* No Reject here. A seller declining their own deal is
+                          just deleting their own work — if the number doesn't
+                          suit, the answer is a counter. Walking away belongs to
+                          the customer, and only the portal offers it.
+
+                          Countering needs the thread, the line breakdown and a
+                          number, none of which fit in a table cell, so this
+                          opens the quotation where all three live. */}
                       <Button
                         variant="secondary"
                         onClick={() => router.push(`/quotations/${row.quotation_id}`)}

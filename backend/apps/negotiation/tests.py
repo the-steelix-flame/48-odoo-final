@@ -503,6 +503,73 @@ class NegotiationRoundTests(PortalTestBase):
         self.assertNotEqual(quotation.status, QuotationStatus.UNDER_NEGOTIATION)
 
 
+class CustomerRejectionTests(PortalTestBase):
+    """Walking away is the customer's decision, and only theirs."""
+
+    def _sent(self):
+        quotation = self._quotation()
+        quotations.submit(quotation, actor=self.rep)
+        negotiation.send_to_customer(quotation, actor=self.rep)
+        return quotation
+
+    def test_customer_can_decline_a_sent_quotation(self):
+        quotation = self._sent()
+        negotiation.reject_by_customer(
+            quotation, actor=self.buyer, note="Went with another supplier."
+        )
+        quotation.refresh_from_db()
+        self.assertEqual(quotation.status, QuotationStatus.REJECTED)
+
+    def test_declining_closes_the_round_still_in_flight(self):
+        """Otherwise the rep's panel keeps asking for a reply to a dead deal."""
+        quotation = self._sent()
+        request = negotiation.submit_request(
+            quotation, actor=self.buyer, requested_discount_percent=Decimal("25")
+        )
+        negotiation.reject_by_customer(quotation, actor=self.buyer)
+
+        request.refresh_from_db()
+        self.assertEqual(request.status, "REJECTED")
+        self.assertIsNone(negotiation.open_request_for(quotation))
+
+    def test_declining_can_happen_mid_negotiation(self):
+        quotation = self._sent()
+        request = negotiation.submit_request(
+            quotation, actor=self.buyer, requested_discount_percent=Decimal("25")
+        )
+        negotiation.counter_request(
+            request, actor=self.rep, counter_discount_percent=Decimal("12")
+        )
+        quotation.refresh_from_db()
+
+        negotiation.reject_by_customer(quotation, actor=self.buyer, note="Still too high.")
+        quotation.refresh_from_db()
+        self.assertEqual(quotation.status, QuotationStatus.REJECTED)
+
+    def test_the_rejection_is_on_the_timeline_for_both_sides(self):
+        quotation = self._sent()
+        negotiation.reject_by_customer(quotation, actor=self.buyer, note="Too expensive.")
+
+        last = negotiation.negotiation_timeline(quotation)[-1]
+        self.assertEqual(last["kind"], "REJECTED")
+        self.assertEqual(last["author_type"], "CUSTOMER")
+        self.assertEqual(last["author_name"], "Portal Co")
+        self.assertIn("Too expensive", last["body"])
+
+    def test_a_confirmed_quotation_cannot_then_be_declined(self):
+        quotation = self._sent()
+        negotiation.confirm_by_customer(quotation, actor=self.buyer)
+        quotation.refresh_from_db()
+
+        with self.assertRaises(ValidationError):
+            negotiation.reject_by_customer(quotation, actor=self.buyer)
+
+    def test_declined_reads_as_declined_to_the_customer(self):
+        label, action_required = negotiation.portal_status(QuotationStatus.REJECTED)
+        self.assertEqual(label, "Declined")
+        self.assertFalse(action_required)
+
+
 class PortalIsolationTests(PortalTestBase):
     def test_access_needs_a_token_not_just_a_login(self):
         quotation = self._quotation()  # never sent, so no token

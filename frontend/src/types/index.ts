@@ -676,6 +676,21 @@ export interface NegotiationView {
   requests: PortalRequest[];
 }
 
+/** The customer's own account. Read-only apart from the password. */
+export interface PortalProfile {
+  login_email: string;
+  display_name: string;
+  company_name: string;
+  tier: CustomerTier;
+  currency: string;
+  contact_email: string;
+  account_manager?: string | null;
+  member_since?: string | null;
+  last_login?: string | null;
+  quotations_received: number;
+  quotations_confirmed: number;
+}
+
 /** One row of the customer's quotation list. Deliberately thin. */
 export interface PortalQuotationRow {
   id: number;
@@ -689,6 +704,8 @@ export interface PortalQuotationRow {
   total: string;
   line_count: number;
   sent_at?: string | null;
+  /** What the rep has taken off, as a share of the pre-discount subtotal. */
+  effective_discount_percent: string;
 }
 
 export interface PortalQuotation {
@@ -703,6 +720,8 @@ export interface PortalQuotation {
   tax_total: string;
   total: string;
   valid_until?: string | null;
+  /** What the rep has taken off, as a share of the pre-discount subtotal. */
+  effective_discount_percent: string;
   company_name: string;
   lines: PortalLine[];
   timeline: TimelineEntry[];

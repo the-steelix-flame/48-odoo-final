@@ -763,6 +763,18 @@ the line was rewritten to 12% — and was updated to assert the order discount p
 `test_accepting_our_counter_never_cuts_a_deeper_line` is the new regression test: an 18% line, a 12%
 counter, and an assertion that the line is still 18% afterwards.
 
+### Per-line comment boxes removed from the portal
+
+"Your decision" repeated the line table that sits directly above it — description and discount, per
+row — purely to hang an "Add a comment about this line…" input off each one. A customer disputing a
+price disputes the order, not line 3; the single **Message** field in the same card already carries
+that, and it is the field the rep's inbox actually surfaces.
+
+Frontend only. `SubmitRequestIn.line_comments` defaults to `[]`, so the portal just stops sending
+the key — the endpoint, the `quotation_line_id` column on `NegotiationMessage` and the thread's
+line-scoped rendering are all untouched, and a rep-side annotation UI could use them with no backend
+change.
+
 ---
 
 ## 2. What this is NOT (scope decision)
@@ -922,6 +934,118 @@ the ACCEPTED event, saying the same thing twice.
 - **Sidebar:** removed **"Customer portal view"**. The portal is a customer's own surface, scoped
   to the quotations *they* were sent; an internal user following that link either sees nothing or
   reads a business's private view. Staff already see the whole conversation on the quotation itself.
+
+---
+
+### Who gets to say no
+
+A rep had a **Decline** button on their own deal, which is just deleting their own work — if the
+number doesn't suit, the answer is a counter. Meanwhile the customer, the one party with a real
+reason to walk away, had no way to do it: their only exits were accept or keep negotiating, so a
+quote they had already refused sat open pretending to be live.
+
+The two sides now have the answers that belong to them:
+
+| Side | Actions |
+|---|---|
+| Sales rep | **Accept** their number · **Counter** with ours |
+| Customer | **Accept** · **Negotiate** · **Reject** |
+
+| File | Change |
+|---|---|
+| `apps/quotations/services.py` | `REJECTED` reachable from `APPROVED`, `SENT` and `UNDER_NEGOTIATION` — every state the customer can see, because "no thank you" is valid at any point in the conversation. |
+| `apps/negotiation/services.py` | New `reject_by_customer()`. Closes any round still in flight, appends a `REJECTED` event, moves the quotation. |
+| `apps/negotiation/api.py` | `POST /api/portal/quotations/{id}/reject`. Portal-only — there is deliberately no internal equivalent. |
+| `components/negotiation/RepNegotiationPanel.tsx` | Decline removed. New "Rejected by customer" panel carrying their reason, so the rep sees *why* rather than inferring it from a status badge. |
+| `app/portal/quotations/[id]/page.tsx` | Accept / Negotiate / Reject. Accept and Negotiate are blocked while a request of theirs is unanswered; **Reject never is** — refusing must always be available. |
+
+Reject is the one action with no precondition beyond the quotation being live. Blocking it would
+be the same bug as before, in reverse: the customer stuck with a deal the UI won't let them end.
+
+### Follow-up: the same Reject lived on a second screen
+
+Removing the button from the quotation panel missed the **Negotiation inbox**
+(`/negotiations`), a separate screen built upstream that carried its own
+Accept / Reject / Negotiate row. A rule enforced on one screen and not the
+other is not a rule.
+
+| File | Change |
+|---|---|
+| `app/(app)/negotiations/page.tsx` | Reject button, its confirm-with-reason panel, the `rejecting`/`note` state and the `reject()` handler all removed. Rows now read Accept · Negotiate. |
+| `apps/negotiation/api.py` | `POST /internal/requests/{id}/reject` **deleted**. Removed at the API boundary rather than only hidden, so a button re-added later gets a 404 and a conversation instead of silently working. |
+
+`services.reject_request` survives: it also settles a quote out of
+`UNDER_NEGOTIATION`, and a teammate's test pins that. Nothing routes to it now.
+**@anubhaw0raj / @sinjeki** — if you were planning to use that endpoint, say so
+and we can decide together; the service is still there.
+
+### Follow-up: the portal list undersold what it was for
+
+The row action said **"Review →"**, which reads as "have a look" and hid that a
+decision was waiting; the banner still offered to "ask a question" after
+messaging was removed. The row now reads **"Accept, negotiate or reject →"**
+with the discount underneath it, and the banner names the same three answers.
+`effective_discount_percent` was added to the list payload as well as the
+detail, so the number is on screen before you open anything.
+
+Verified against real data: `Q-1009 — 8.00% off`, `Q-1007 — 10.00% off`.
+
+### The discount is now stated, not implied
+
+The portal showed a percentage per line, but an order-level discount sits on top of those, so no
+number on the page answered "what are we actually being offered?". `effective_discount_percent` is
+computed server-side — `discount_total / subtotal` — and shown as a headline figure above the
+decision buttons, with the money either side of it.
+
+### Free-text messaging removed from both sides
+
+The standalone "Send message" box is gone from the rep panel and the portal. Every message that
+matters now rides along with a decision — the note on a counter-offer, the comment on a line — so a
+separate chat channel was a second place to say things that nobody was obliged to read. Existing
+messages still render in the timeline; it is history, and history is not deleted.
+
+Removing it from only one side would have been worse than leaving it: a channel the customer can
+write to and the rep cannot answer is a trap.
+
+---
+
+### A customer profile, and one Back control for the whole app
+
+**Profile** (`/portal/profile`). Split deliberately into two halves: the account
+details are **read-only** and the password is not. Business name, pricing tier and
+account manager are ours to set — a customer able to edit their own tier would be
+editing their own discount ceiling. What they get is their sign-in email, contact
+address, account manager, member-since, last sign-in, and how many quotations
+they've received and confirmed.
+
+| File | Change |
+|---|---|
+| `apps/accounts/staff.py` | New `change_own_password()`. Distinct from the admin `reset_password()`: that one acts on someone else's account and *cannot* ask for the old password, so here the current password **is** the proof of identity — without checking it, anyone at an unlocked screen could lock the real owner out. Also enforces a minimum length and refuses a no-op reuse. |
+| `apps/negotiation/services.py` | `portal_profile()` and `assert_portal_user()`. Received-count comes from `PortalToken`, not from the customer's quotations, so drafts they were never sent are not counted. |
+| `apps/negotiation/api.py` | `GET /api/portal/profile`, `POST /api/portal/profile/password`. |
+| `app/portal/profile/page.tsx` | **New.** Read-only account card beside the password form. |
+| `app/portal/layout.tsx` | Profile is now a real nav item — it was one of the dead `<span>`s removed earlier. |
+
+Verified: wrong current password, too short, and reuse are each refused with their
+own message; a valid change works, the new password authenticates and the old one
+stops; a `SALES_REP` gets 403 on the portal profile.
+
+**Back.** Lives in `PageHeader`, above the title. Every screen already renders a
+`PageHeader` — 21 of 25 pages, and the four that don't are the dashboard, login and
+two redirects, none of which want one — so it lands in the same place everywhere for
+free and cannot drift as pages are added. `hideBack` opts out.
+
+It uses `router.back()` rather than a computed parent path, because arriving at a
+quotation from the negotiation inbox should return you to the inbox, not to the
+quotations list.
+
+The interesting part is when it appears. `window.history.length` is no use: it counts
+everything the tab ever visited, so on the first screen after login it would offer to
+go "back" to `/login`, which immediately redirects forward again — a button that
+visibly does nothing. `NavigationProvider` (`lib/navigation.tsx`) therefore mounts
+**per authenticated shell**, never at the root, and only counts navigations that
+happen inside one. Land directly on a shared portal link and there is no Back button,
+which is correct: there is nothing in-app behind you.
 
 ---
 

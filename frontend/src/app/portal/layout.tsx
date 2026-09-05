@@ -16,6 +16,7 @@ import { usePathname, useRouter } from "next/navigation";
 
 import { Loading } from "@/components/ui";
 import { useAuth } from "@/lib/auth";
+import { NavigationProvider } from "@/lib/navigation";
 
 export default function PortalLayout({ children }: { children: React.ReactNode }) {
   const { user, loading, logout } = useAuth();
@@ -30,6 +31,7 @@ export default function PortalLayout({ children }: { children: React.ReactNode }
   if (loading || !user) return <Loading label="Checking your session…" />;
 
   return (
+    <NavigationProvider>
     <div className="min-h-screen">
       <nav className="border-b border-blue-400/30 bg-brand">
         <div className="mx-auto flex max-w-5xl items-center gap-3 px-4 py-2.5">
@@ -40,16 +42,22 @@ export default function PortalLayout({ children }: { children: React.ReactNode }
               browser's back button. "Messages" and "Profile" sat beside it as
               decoration for screens that don't exist — a nav item that does
               nothing is worse than one that isn't there. */}
-          <Link
-            href="/portal"
-            className={`rounded-lg px-3 py-1.5 text-sm font-medium transition ${
-              pathname === "/portal"
-                ? "bg-black/70 text-white"
-                : "border border-white/40 text-white/90 hover:bg-white/15"
-            }`}
-          >
-            My Quotations
-          </Link>
+          {[
+            { href: "/portal", label: "My Quotations" },
+            { href: "/portal/profile", label: "Profile" },
+          ].map((item) => (
+            <Link
+              key={item.href}
+              href={item.href}
+              className={`rounded-lg px-3 py-1.5 text-sm font-medium transition ${
+                pathname === item.href
+                  ? "bg-black/70 text-white"
+                  : "border border-white/40 text-white/90 hover:bg-white/15"
+              }`}
+            >
+              {item.label}
+            </Link>
+          ))}
           <div className="ml-auto flex items-center gap-3">
             <span className="hidden text-xs text-white/80 sm:inline">{user.full_name}</span>
             <button
@@ -63,5 +71,6 @@ export default function PortalLayout({ children }: { children: React.ReactNode }
       </nav>
       <main className="mx-auto max-w-5xl px-4 py-8">{children}</main>
     </div>
+    </NavigationProvider>
   );
 }

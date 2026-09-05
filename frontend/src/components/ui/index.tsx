@@ -11,6 +11,8 @@
 import Link from "next/link";
 import type { ReactNode } from "react";
 
+import { useNavigation } from "@/lib/navigation";
+
 // ------------------------------------------------------------------ Button
 type ButtonProps = {
   children: ReactNode;
@@ -254,18 +256,44 @@ export function PageHeader({
   title,
   subtitle,
   actions,
+  /** Opt out on screens where going back makes no sense. */
+  hideBack = false,
 }: {
   title: string;
   subtitle?: string;
   actions?: ReactNode;
+  hideBack?: boolean;
 }) {
+  // the-steelix-flame: Back lives here, above the title, rather than being
+  // placed by each page. Every screen already renders a PageHeader, so it
+  // lands in exactly the same spot everywhere for free — and it cannot drift
+  // as pages are added. It appears only once there is somewhere in-app to go
+  // back to; see lib/navigation.tsx for why history.length won't do.
+  const { canGoBack, goBack } = useNavigation();
+
   return (
-    <header className="mb-[24px] flex flex-wrap items-start justify-between gap-4 animate-dfIn">
-      <div>
-        <h1 className="font-heading text-[28px] font-bold tracking-[-0.03em] text-[#0F172A]">{title}</h1>
-        {subtitle && <p className="mt-[4px] text-[14px] text-[#64748B]">{subtitle}</p>}
+    <header className="mb-[24px] animate-dfIn">
+      {canGoBack && !hideBack && (
+        <button
+          onClick={goBack}
+          className="group -ml-[6px] mb-[10px] inline-flex items-center gap-[6px] rounded-[7px] px-[6px] py-[3px] text-[13px] font-medium text-[#64748B] transition hover:bg-[#F1F5F9] hover:text-[#0F172A]"
+        >
+          <span
+            aria-hidden
+            className="text-[15px] leading-none transition-transform group-hover:-translate-x-[2px]"
+          >
+            ←
+          </span>
+          Back
+        </button>
+      )}
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <h1 className="font-heading text-[28px] font-bold tracking-[-0.03em] text-[#0F172A]">{title}</h1>
+          {subtitle && <p className="mt-[4px] text-[14px] text-[#64748B]">{subtitle}</p>}
+        </div>
+        {actions && <div className="flex flex-wrap gap-[10px]">{actions}</div>}
       </div>
-      {actions && <div className="flex flex-wrap gap-[10px]">{actions}</div>}
     </header>
   );
 }

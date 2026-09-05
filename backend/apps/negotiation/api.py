@@ -94,6 +94,8 @@ class PortalQuotationRowOut(Schema):
     total: Decimal
     line_count: int
     sent_at: datetime | None = None
+    #: What the rep has taken off, as a share of the pre-discount subtotal.
+    effective_discount_percent: Decimal
 
 
 class PortalQuotationOut(Schema):
@@ -108,6 +110,9 @@ class PortalQuotationOut(Schema):
     tax_total: Decimal
     total: Decimal
     valid_until: date | None = None
+    #: What the rep has taken off, as a share of the pre-discount subtotal.
+    #: Computed here so the portal renders a number rather than deriving one.
+    effective_discount_percent: Decimal
     company_name: str
     lines: list[PortalLineOut]
     timeline: list[TimelineEntryOut]
@@ -115,6 +120,32 @@ class PortalQuotationOut(Schema):
     #: The round awaiting a reply, if any. Non-null with a
     #: `counter_discount_percent` means the ball is with the customer.
     open_request: PortalRequestOut | None = None
+
+
+class PortalProfileOut(Schema):
+    """The customer's own account, as they see it.
+
+    Read-only apart from the password: the business name, tier and account
+    manager are ours to set, not theirs to edit — a customer promoting
+    themselves to Gold would rewrite their own discount ceiling.
+    """
+
+    login_email: str
+    display_name: str
+    company_name: str
+    tier: str
+    currency: str
+    contact_email: str
+    account_manager: str | None = None
+    member_since: datetime | None = None
+    last_login: datetime | None = None
+    quotations_received: int
+    quotations_confirmed: int
+
+
+class ChangePasswordIn(Schema):
+    current_password: str
+    new_password: str
 
 
 class SubmitRequestIn(Schema):
@@ -156,6 +187,20 @@ class NegotiationOut(Schema):
 # --------------------------------------------------------------------------
 # Customer routes — token-scoped
 # --------------------------------------------------------------------------
+def _effective_discount(quotation: Quotation) -> Decimal:
+    """Total taken off, as a percentage of the pre-discount subtotal.
+
+    The lines each carry their own percentage, but an order-level discount sits
+    on top of them, so no single line answers "how much did they give us?".
+    """
+    subtotal = Decimal(quotation.subtotal or 0)
+    if subtotal <= 0:
+        return Decimal("0.00")
+    return (Decimal(quotation.discount_total or 0) / subtotal * Decimal(100)).quantize(
+        Decimal("0.01")
+    )
+
+
 def _portal_payload(quotation: Quotation) -> dict:
     label, action_required = services.portal_status(quotation.status)
     open_request = services.open_request_for(quotation)
@@ -184,12 +229,33 @@ def _portal_payload(quotation: Quotation) -> dict:
         "tax_total": quotation.tax_total,
         "total": quotation.total,
         "valid_until": quotation.valid_until,
+        "effective_discount_percent": _effective_discount(quotation),
         "company_name": quotation.customer.name,
         "lines": list(quotation.lines.all()),
         "timeline": services.negotiation_timeline(quotation),
         "requests": list(quotation.negotiation_requests.all()),
         "open_request": open_request,
     }
+
+
+@router.get("/profile", response=PortalProfileOut, auth=any_auth)
+def portal_profile(request):
+    """The signed-in customer's own account."""
+    return services.portal_profile(request.auth)
+
+
+@router.post("/profile/password", auth=any_auth)
+def portal_change_password(request, payload: ChangePasswordIn):
+    """Change your own password. The current one is the proof of identity."""
+    from apps.accounts import staff
+
+    services.assert_portal_user(request.auth)
+    staff.change_own_password(
+        request.auth,
+        current_password=payload.current_password,
+        new_password=payload.new_password,
+    )
+    return {"ok": True, "detail": "Your password has been changed."}
 
 
 @router.get("/quotations", response=list[PortalQuotationRowOut], auth=any_auth)
@@ -214,6 +280,7 @@ def portal_list_quotations(request):
                 "total": quotation.total,
                 "line_count": quotation.lines.count(),
                 "sent_at": getattr(quotation, "sent_at", None),
+                "effective_discount_percent": _effective_discount(quotation),
             }
         )
     return rows
@@ -272,6 +339,19 @@ def portal_accept_counter(request, quotation_id: int, request_id: int):
     if negotiation_request.quotation_id != quotation.id:
         raise NotFound("Negotiation request not found")
     services.accept_counter(negotiation_request, actor=request.auth)
+    quotation.refresh_from_db()
+    return _portal_payload(quotation)
+
+
+@router.post("/quotations/{quotation_id}/reject", response=PortalQuotationOut, auth=any_auth)
+def portal_reject(request, quotation_id: int, payload: ResolveIn):
+    """Decline the quotation.
+
+    Only the customer gets this. A rep countering their own deal is a
+    negotiation; a rep rejecting it is just deleting their own work.
+    """
+    quotation = services.authorise_portal_access(request.auth, quotation_id)
+    services.reject_by_customer(quotation, actor=request.auth, note=payload.note)
     quotation.refresh_from_db()
     return _portal_payload(quotation)
 
@@ -399,10 +479,17 @@ def accept_request(request, request_id: int):
     }
 
 
-@router.post("/internal/requests/{request_id}/reject", auth=internal_auth)
-def reject_request(request, request_id: int, payload: ResolveIn):
-    services.reject_request(_get_request(request_id), actor=request.auth, note=payload.note)
-    return {"ok": True}
+# There is deliberately NO rep-side reject endpoint.
+#
+# A seller declining their own deal is just deleting their own work; the rep's
+# two answers are accept or counter. Walking away belongs to the customer, via
+# POST /api/portal/quotations/{id}/reject.
+#
+# Removed at the API boundary rather than only hidden in the UI, so the rule is
+# actually enforced — a button re-added later gets a 404 and a conversation,
+# instead of silently working. `services.reject_request` survives because it
+# also settles a quote out of UNDER_NEGOTIATION and a test pins that behaviour;
+# nothing routes to it today.
 
 
 def _get_request(request_id: int) -> NegotiationRequest:

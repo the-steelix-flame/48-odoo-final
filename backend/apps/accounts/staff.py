@@ -79,6 +79,33 @@ def create_account(
     return AccountResult(user=user, password=password)
 
 
+#: Short enough not to fight a demo, long enough not to be a lie about safety.
+MIN_PASSWORD_LENGTH = 8
+
+
+@transaction.atomic
+def change_own_password(user: User, *, current_password: str, new_password: str) -> User:
+    """A user changes their own password.
+
+    Distinct from `reset_password`, which an admin performs on someone else's
+    account and therefore cannot require the old one. Here the current password
+    IS the proof of identity — without checking it, anyone who found an
+    unlocked screen could lock the real owner out.
+    """
+    if not user.check_password(current_password):
+        raise ValidationError("Your current password is not correct")
+    if len(new_password or "") < MIN_PASSWORD_LENGTH:
+        raise ValidationError(
+            f"Choose a password of at least {MIN_PASSWORD_LENGTH} characters"
+        )
+    if new_password == current_password:
+        raise ValidationError("Your new password must be different from the current one")
+
+    user.set_password(new_password)
+    user.save(update_fields=["password"])
+    return user
+
+
 @transaction.atomic
 def reset_password(user: User, *, actor: User | None = None) -> AccountResult:
     """Mint a fresh password and re-enable the account.

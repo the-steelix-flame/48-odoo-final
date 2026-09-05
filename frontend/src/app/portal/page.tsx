@@ -27,7 +27,7 @@ import {
   Row,
   Table,
 } from "@/components/ui";
-import { date, money } from "@/lib/format";
+import { date, money, percent } from "@/lib/format";
 import { useAuth } from "@/lib/auth";
 import { useApi } from "@/lib/useApi";
 import type { PortalQuotationRow } from "@/types";
@@ -58,12 +58,16 @@ export default function PortalHome() {
       />
 
       {awaiting.length > 0 && (
-        <div className="mb-6 rounded-xl border border-amber-700 bg-amber-950/30 p-4">
-          <p className="text-sm text-amber-200">
+        // Was styled for the old dark theme, and its wording still offered to
+        // "ask a question" after messaging was removed. Now light-themed, and
+        // it names the three answers the quotation actually gives you.
+        <div className="mb-6 rounded-xl border border-[#FDE68A] bg-[#FFFBEB] p-4">
+          <p className="text-sm text-[#92400E]">
             {awaiting.length === 1
               ? "One quotation is waiting for you."
               : `${awaiting.length} quotations are waiting for you.`}{" "}
-            Open it to review the terms, ask a question, propose a different discount, or confirm.
+            Open it to see the discount on offer, then <strong>accept</strong>,{" "}
+            <strong>negotiate</strong> or <strong>reject</strong>.
           </p>
         </div>
       )}
@@ -93,8 +97,19 @@ export default function PortalHome() {
                 <Cell>
                   <Badge tone={toneFor(row)}>{row.status_label}</Badge>
                 </Cell>
-                <Cell className="text-right text-xs font-medium text-[#0891B2]">
-                  {row.action_required ? "Review →" : "View →"}
+                <Cell className="text-right">
+                  {/* The row said "Review", which reads as "have a look" and
+                      hid the fact that a decision is waiting. It now names the
+                      discount on the table, since that is what the reader is
+                      actually deciding about. */}
+                  <span className="text-xs font-medium text-[#0891B2]">
+                    {row.action_required ? "Accept, negotiate or reject →" : "View →"}
+                  </span>
+                  {Number(row.effective_discount_percent) > 0 && (
+                    <span className="mt-0.5 block text-xs text-[#64748B]">
+                      {percent(row.effective_discount_percent, 1)} off
+                    </span>
+                  )}
                 </Cell>
               </Row>
             ))}

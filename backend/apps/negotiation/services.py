@@ -61,7 +61,7 @@ PORTAL_STATUS_LABELS: dict[str, tuple[str, bool]] = {
     QuotationStatus.PENDING_APPROVAL: ("Under internal review", False),
     QuotationStatus.APPROVED: ("Ready for your confirmation", True),
     QuotationStatus.CONFIRMED: ("Confirmed", False),
-    QuotationStatus.REJECTED: ("Closed", False),
+    QuotationStatus.REJECTED: ("Declined", False),
     QuotationStatus.CANCELLED: ("Closed", False),
     QuotationStatus.DRAFT: ("Being prepared", False),
 }
@@ -69,6 +69,48 @@ PORTAL_STATUS_LABELS: dict[str, tuple[str, bool]] = {
 
 def portal_status(status: str) -> tuple[str, bool]:
     return PORTAL_STATUS_LABELS.get(status, (status.replace("_", " ").title(), False))
+
+
+def assert_portal_user(user):
+    """Every portal route resolves the caller through their business."""
+    profile = getattr(user, "customer_profile", None)
+    if profile is None:
+        raise PermissionDenied("This area is for customer accounts")
+    return profile
+
+
+def portal_profile(user) -> dict:
+    """The customer's own account.
+
+    Everything here except the password is read-only: the business name, tier
+    and account manager are ours to set. A customer able to edit their own tier
+    would be editing their own discount ceiling.
+    """
+    profile = assert_portal_user(user)
+    quotations = Quotation.objects.filter(customer=profile)
+    return {
+        "login_email": user.email,
+        "display_name": user.full_name or user.email,
+        "company_name": profile.name,
+        "tier": profile.tier,
+        "currency": profile.currency,
+        "contact_email": profile.contact_email,
+        "account_manager": (
+            profile.owner_rep.full_name or profile.owner_rep.email
+            if profile.owner_rep_id
+            else None
+        ),
+        "member_since": user.date_joined,
+        "last_login": user.last_login,
+        # Only what was actually sent to them; drafts stay private.
+        "quotations_received": PortalToken.objects.filter(customer=profile)
+        .values("quotation_id")
+        .distinct()
+        .count(),
+        "quotations_confirmed": quotations.filter(
+            status=QuotationStatus.CONFIRMED
+        ).count(),
+    }
 
 
 def portal_quotations_for(user) -> list[Quotation]:
@@ -542,6 +584,54 @@ def reject_request(request: NegotiationRequest, *, actor, note: str = "") -> Neg
     # Negotiation column with nothing left to negotiate.
     _settle_round(request.quotation, actor=actor, reprice=False)
     return request
+
+
+@transaction.atomic
+def reject_by_customer(quotation: Quotation, *, actor, note: str = "") -> Quotation:
+    """The customer declines the quotation outright.
+
+    A rep cannot reject their own deal — that is why the sales side only offers
+    accept or counter. Walking away is the customer's decision alone, and it
+    has to be reachable at any point they can see the quote, otherwise a deal
+    they have already refused sits open forever pretending to be live.
+
+    Any round still in flight is closed at the same time, so the rep's panel
+    stops asking for a reply to a conversation that is over.
+    """
+    rejectable = (
+        QuotationStatus.SENT,
+        QuotationStatus.UNDER_NEGOTIATION,
+        QuotationStatus.APPROVED,
+    )
+    if quotation.status not in rejectable:
+        raise ValidationError(
+            "This quotation can no longer be declined in its current state."
+        )
+
+    open_request = open_request_for(quotation)
+    if open_request is not None:
+        open_request.status = NegotiationRequestStatus.REJECTED
+        open_request.resolved_by = actor
+        open_request.resolved_at = timezone.now()
+        open_request.resolution_note = note or "Customer declined the quotation."
+        open_request.save()
+
+    record_event(
+        quotation,
+        kind=NegotiationEvent.Kind.REJECTED,
+        author_type=NegotiationMessage.AuthorType.CUSTOMER,
+        actor=actor,
+        body=note or "Declined this quotation.",
+        request=open_request,
+    )
+    quotation_services.transition(quotation, QuotationStatus.REJECTED, actor=actor)
+    quotation_services.record_event(
+        quotation,
+        QuotationEventType.REJECTED,
+        actor=actor,
+        note=note or "Declined by the customer.",
+    )
+    return quotation
 
 
 @transaction.atomic
