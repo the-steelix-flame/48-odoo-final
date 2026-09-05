@@ -62,7 +62,7 @@ export default function InvoicesPage() {
           >
             {rows.map((invoice) => (
               <Row key={invoice.id} onClick={() => router.push(`/invoices/${invoice.id}`)}>
-                <Cell className="font-medium text-slate-100">{invoice.number}</Cell>
+                <Cell className="font-heading font-medium text-[#0F172A]">{invoice.number}</Cell>
                 <Cell>{invoice.customer_name}</Cell>
                 <Cell>
                   <Badge tone={invoice.invoice_type === "RECURRING" ? "blue" : "slate"}>
@@ -70,11 +70,11 @@ export default function InvoicesPage() {
                   </Badge>
                 </Cell>
                 <Cell>{money(invoice.total, invoice.currency)}</Cell>
-                <Cell className="text-slate-400">
+                <Cell className="text-[#64748B]">
                   {money(invoice.amount_paid, invoice.currency)}
                 </Cell>
                 <Cell>{money(invoice.amount_due, invoice.currency)}</Cell>
-                <Cell className="text-slate-400">{date(invoice.due_date)}</Cell>
+                <Cell className="text-[#64748B]">{date(invoice.due_date)}</Cell>
                 <Cell>
                   <Badge tone={STATUS_TONE[invoice.status]}>{titleCase(invoice.status)}</Badge>
                 </Cell>

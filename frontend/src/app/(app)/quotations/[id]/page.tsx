@@ -46,6 +46,20 @@ function commitOnEnter(event: KeyboardEvent<HTMLInputElement>) {
   }
 }
 
+/**
+ * Clearing a number input to retype it leaves `value === ""`, and `Number("")`
+ * is 0 — so a blur mid-edit used to PATCH `quantity: ""`, which the backend
+ * rejects. Treat blank or unparseable as "no change" and put the saved value
+ * back, so the field can never sit showing something that was never saved.
+ */
+function committedNumber(raw: string, fallback: string): string | null {
+  const trimmed = raw.trim();
+  if (trimmed === "") return null;
+  const parsed = Number(trimmed);
+  if (!Number.isFinite(parsed)) return null;
+  return parsed === Number(fallback) ? null : trimmed;
+}
+
 export default function QuotationBuilderPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const router = useRouter();
@@ -65,6 +79,21 @@ export default function QuotationBuilderPage({ params }: { params: Promise<{ id:
   if (!data) return null;
 
   const editable = ["DRAFT", "UNDER_NEGOTIATION", "REJECTED"].includes(data.status);
+
+  /**
+   * A quote locks the moment it leaves the rep's hands. Until now the inputs
+   * simply went disabled with nothing saying why, which reads as "the quantity
+   * box is broken" rather than "this quote is past editing".
+   */
+  const lockedReason = editable
+    ? ""
+    : data.status === "PENDING_APPROVAL"
+      ? "This quote is out for approval. Lines are frozen until an approver returns it."
+      : data.status === "APPROVED"
+        ? "This quote is approved. Editing a line now would invalidate the approval it was granted on — return it first to make changes."
+        : data.status === "SENT"
+          ? "This quote is with the customer. They can counter from the portal, which reopens it for edits."
+          : `This quote is ${titleCase(data.status).toLowerCase()} and can no longer be edited.`;
 
   /** Every mutation replaces local state with the backend's recomputed truth. */
   async function run(fn: () => Promise<QuotationDetail>) {
@@ -159,6 +188,12 @@ export default function QuotationBuilderPage({ params }: { params: Promise<{ id:
         </div>
       )}
 
+      {!editable && (
+        <div className="mb-4">
+          <Note>Read-only — {lockedReason}</Note>
+        </div>
+      )}
+
       <div className="grid gap-6 xl:grid-cols-[2fr_1fr]">
         {/* -------------------------------------------------- cart */}
         <div className="space-y-6">
@@ -214,14 +249,24 @@ export default function QuotationBuilderPage({ params }: { params: Promise<{ id:
                       <input
                         type="number"
                         min="1"
+                        step="1"
                         disabled={!editable || busy}
+                        title={editable ? undefined : lockedReason}
                         className={`${inputClass} w-20`}
+                        // Keyed on the saved value so a rejected or clamped
+                        // edit snaps back to what the server actually holds,
+                        // instead of leaving the typed number on screen.
+                        key={`qty-${line.id}-${line.quantity}`}
                         defaultValue={Number(line.quantity)}
                         onKeyDown={commitOnEnter}
-                        onBlur={(e) =>
-                          Number(e.target.value) !== Number(line.quantity) &&
-                          updateLine(line.id, { quantity: e.target.value })
-                        }
+                        onBlur={(e) => {
+                          const next = committedNumber(e.target.value, line.quantity);
+                          if (next === null) {
+                            e.target.value = String(Number(line.quantity));
+                            return;
+                          }
+                          updateLine(line.id, { quantity: next });
+                        }}
                       />
                     </Cell>
                     <Cell>{money(line.unit_price, data.currency)}</Cell>
@@ -231,13 +276,19 @@ export default function QuotationBuilderPage({ params }: { params: Promise<{ id:
                         min="0"
                         max="100"
                         disabled={!editable || busy}
+                        title={editable ? undefined : lockedReason}
                         className={`${inputClass} w-20`}
+                        key={`disc-${line.id}-${line.discount_percent}`}
                         defaultValue={Number(line.discount_percent)}
                         onKeyDown={commitOnEnter}
-                        onBlur={(e) =>
-                          Number(e.target.value) !== Number(line.discount_percent) &&
-                          updateLine(line.id, { discount_percent: e.target.value })
-                        }
+                        onBlur={(e) => {
+                          const next = committedNumber(e.target.value, line.discount_percent);
+                          if (next === null) {
+                            e.target.value = String(Number(line.discount_percent));
+                            return;
+                          }
+                          updateLine(line.id, { discount_percent: next });
+                        }}
                       />
                     </Cell>
                     <Cell className="text-slate-400">

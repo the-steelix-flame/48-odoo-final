@@ -22,9 +22,9 @@ export default function PortalHome() {
         subtitle={`Signed in as ${user?.email}`}
       />
       <Card>
-        <p className="text-sm text-slate-300">
+        <p className="text-[13px] text-[#475569]">
           Open the quotation using the link your account manager sent you. It looks like{" "}
-          <code className="rounded bg-black/40 px-1.5 py-0.5 text-xs text-slate-200">
+          <code className="rounded bg-[#F1F5F9] px-[6px] py-[2px] font-mono text-[12px] text-[#0F172A]">
             /portal/quotations/&lt;id&gt;
           </code>
           .

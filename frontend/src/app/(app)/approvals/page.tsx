@@ -68,7 +68,7 @@ export default function ApprovalsPage() {
           >
             {rows.map((row) => (
               <Row key={row.id} onClick={() => router.push(`/approvals/${row.id}`)}>
-                <Cell className="font-medium text-slate-100">{row.quotation_number}</Cell>
+                <Cell className="font-heading font-medium text-[#0F172A]">{row.quotation_number}</Cell>
                 <Cell>{row.customer_name}</Cell>
                 <Cell>{row.customer_tier}</Cell>
                 <Cell>
@@ -117,7 +117,7 @@ export default function ApprovalsPage() {
                     {titleCase(row.status)}
                   </Badge>
                 </Cell>
-                <Cell className="text-slate-400">{dateTime(row.created_at)}</Cell>
+                <Cell className="text-[#64748B]">{dateTime(row.created_at)}</Cell>
               </Row>
             ))}
           </Table>
