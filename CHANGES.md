@@ -157,13 +157,53 @@ Extended Warranty line). The wireframes are illustrative. **`seed_demo` is the s
 | 6 | Agree whether `suggest_plan` should require `CONFIRMED` (§2.3) | @anubhaw0raj + team | 🟢 |
 | 7 | Promote the fulfillment override modal to a shared `Modal` component | @sinjeki | 🟢 optional |
 
-### Still unverified in my lane (highest remaining risk)
+---
 
-**Hybrid billing has not been proven end to end.** Q-1003 had no `RECURRING` lines, so no
-subscription was created and the one-time/recurring split was never exercised. That is one of the
-five "never cut" graded items in `IMPLEMENTATION.md` §4. It needs a quotation containing **both** a
-one-time product and a subscription product, confirmed end to end, producing separate invoices.
-**Blocked behind §2.1** — I cannot confirm an order over the API until `confirm` stops 500-ing.
+## 4. Verification log — Q-1002 driven end to end
 
-Also not yet exercised: Record Payment (screen 13) and the cancellation credit note (screen 10).
-Both are implemented; neither has been run.
+Run against the seeded database and **committed** (the demo needs this data — screens 9, 10, 12 and
+13 rendered completely empty before this, because there were zero subscriptions).
+
+Driven through the **service layer**, deliberately not over HTTP, so it does not depend on §2.1
+being fixed first. `services.confirm()` itself is fine — only its HTTP response is broken.
+
+### Hybrid billing — one order, two lifecycles ✅
+
+Q-1002 mixes `ONE_TIME` Laptop Pro 14 ×12 with `RECURRING` Support SLA on a Quarterly plan.
+Approved as Sales Manager, then confirmed:
+
+| Artefact | Result |
+|---|---|
+| `INV-1041` | type `ONE_TIME`, **$14,241.60** — contains the laptop only |
+| `INV-1040` | type `RECURRING`, **$285.00** — contains the Quarterly Plan period only |
+| Subscription #1 | ACTIVE, qty 1, period `2026-09-05 → 2026-12-05`, next bill `2026-12-05` |
+| Fulfillment plan #3 | 12 × Laptop from Main Warehouse. **The subscription never entered fulfillment.** |
+
+`14,241.60 + 285.00 = 14,526.60` — exactly the order total. Asserted: no recurring line leaks onto
+the one-time invoice, and no recurring line is sent to a warehouse.
+
+### Payments (screen 13) ✅
+
+`INV-1041`: `OPEN` → part-paid $5,000 → **`PARTIALLY_PAID`** (due $9,241.60) → settled remainder →
+**`PAID`**. Status transitions are driven by `amount_due`, not set by hand.
+
+### Proration, both directions (screen 10) ✅
+
+Mid-cycle on `2026-10-05`, 61 of 91 days remaining:
+
+| Change | Proration | Document |
+|---|---|---|
+| 1 → 3 units | **+$382.09** | `INV-1042` type `PRORATION` |
+| 3 → 2 units | **−$191.04** | `CN-501` credit note |
+
+`382.09 / 2 = 191.045` — the downgrade of one unit is exactly half the upgrade of two. Symmetric by
+construction, because it is one signed formula rather than two code paths.
+
+### Still not exercised
+
+- Subscription **cancellation** (immediate-with-credit vs end-of-period) — implemented, not run.
+  Deliberately skipped: cancelling the only live subscription would empty screens 9 and 10 again.
+- Backorder **consolidation through the browser UI** — proven at service level (§1), but the modal
+  and button have not been clicked in a real browser.
+- Everything above went through the service layer. **The HTTP path for confirm is still broken
+  (§2.1)** and remains the one blocker for a genuine click-through demo.
