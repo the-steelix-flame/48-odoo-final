@@ -504,10 +504,13 @@ def _assert_editable(quotation: Quotation) -> None:
     # the customer had already refused, under the same number and with the
     # rejection still sitting in its audit trail. If the deal is back on, it is a
     # new quotation.
-    editable = {
-        QuotationStatus.DRAFT,
-        QuotationStatus.UNDER_NEGOTIATION,
-    }
+    # DRAFT only. While a quotation is UNDER_NEGOTIATION the terms are what the
+    # two sides are arguing about, and they move by accept or counter - both of
+    # which set order_discount_percent directly. Hand-editing a line underneath
+    # a live counter-offer would change the thing being negotiated without the
+    # other side seeing it, and the customer would be answering a quote that no
+    # longer exists.
+    editable = {QuotationStatus.DRAFT}
     if quotation.status not in editable:
         raise InvalidTransition(
             f"A quotation in {quotation.status} cannot be edited",

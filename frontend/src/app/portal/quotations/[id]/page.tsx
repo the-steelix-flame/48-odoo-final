@@ -49,6 +49,16 @@ export default function PortalQuotationPage({ params }: { params: Promise<{ id: 
   const [actionError, setActionError] = useState<string | null>(null);
   const [confirmNotice, setConfirmNotice] = useState<string | null>(null);
 
+  /**
+   * Negotiating means asking for something. With all three fields blank the
+   * request carried no counter discount, no date and no message — the rep's
+   * inbox showed "Acme Corp wants… nothing", and the quote still moved to
+   * UNDER_NEGOTIATION and blocked Accept. At least one field has to say what is
+   * being asked for.
+   */
+  const hasSomethingToAsk =
+    counterDiscount.trim() !== "" || deliveryDate.trim() !== "" || message.trim() !== "";
+
   const { data, error, loading, reload, setData } = useApi<PortalQuotation>(
     `/portal/quotations/${id}`,
   );
@@ -264,12 +274,10 @@ export default function PortalQuotationPage({ params }: { params: Promise<{ id: 
             </Field>
           </div>
 
-          {/* Three answers, and only the customer gets all three. Accepting
-              and negotiating are blocked while a request of theirs is still
-              unanswered — the server refuses both, and they used to find that
-              out by clicking. Declining is never blocked: "no thank you" must
-              always be available, or a deal they've already refused sits open
-              pretending to be live. */}
+          {/* Three answers, and only the customer gets all three.
+              Accept and Reject are the answers to THIS quotation, so they are
+              live until a request of theirs is outstanding. Negotiate needs
+              something to actually ask for — see hasSomethingToAsk. */}
           <div className="mt-5 flex flex-wrap items-center gap-2">
             <Button
               variant="success"
@@ -278,19 +286,33 @@ export default function PortalQuotationPage({ params }: { params: Promise<{ id: 
             >
               Accept
             </Button>
+            <span
+              title={
+                awaitingOurReply
+                  ? "Your last request is still with our team"
+                  : hasSomethingToAsk
+                    ? undefined
+                    : "Enter a counter discount, a delivery date or a message first"
+              }
+            >
+              <Button
+                variant="secondary"
+                onClick={submitRequest}
+                disabled={busy || awaitingOurReply || !hasSomethingToAsk}
+              >
+                Negotiate
+              </Button>
+            </span>
             <Button
-              variant="secondary"
-              onClick={submitRequest}
+              variant="danger"
+              onClick={rejectQuotation}
               disabled={busy || awaitingOurReply}
             >
-              Negotiate
-            </Button>
-            <Button variant="danger" onClick={rejectQuotation} disabled={busy}>
               Reject
             </Button>
             {awaitingOurReply && (
               <span className="text-xs text-[#92400E]">
-                Waiting on our reply to your request — you can accept or negotiate again once
+                Waiting on our reply to your request — Accept, Negotiate and Reject reopen once
                 we&apos;ve responded.
               </span>
             )}

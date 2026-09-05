@@ -106,7 +106,11 @@ export default function QuotationBuilderPage({ params }: { params: Promise<{ id:
   // quietly rebuilt under the same number, with the rejection still sitting in
   // its own audit trail. The backend now refuses those edits with a 409; this
   // stops the screen offering them in the first place.
-  const editable = ["DRAFT", "UNDER_NEGOTIATION"].includes(data.status);
+  // DRAFT only. A quotation under negotiation is the thing the two sides are
+  // arguing about: it moves by accept or counter, never by hand-editing a line
+  // underneath a live counter-offer. The backend refuses those writes too.
+  const editable = data.status === "DRAFT";
+  const negotiating = data.status === "UNDER_NEGOTIATION";
   const closed = ["REJECTED", "CANCELLED"].includes(data.status);
 
   /**
@@ -121,7 +125,9 @@ export default function QuotationBuilderPage({ params }: { params: Promise<{ id:
       : data.status === "APPROVED"
         ? "This quote is approved. Editing a line now would invalidate the approval it was granted on — return it first to make changes."
         : data.status === "SENT"
-          ? "This quote is with the customer. They can counter from the portal, which reopens it for edits."
+          ? "This quote is with the customer. They can counter from the portal, and you answer from the negotiation panel below."
+          : negotiating
+            ? "This quote is being negotiated. The terms move by accepting or countering below — editing a line here would change what the customer is answering without them seeing it."
           : closed
             ? closedReason(data)
             : `This quote is ${titleCase(data.status).toLowerCase()} and can no longer be edited.`;
@@ -557,7 +563,10 @@ export default function QuotationBuilderPage({ params }: { params: Promise<{ id:
             )}
           </Card>
 
-          {/* ------------------------------------------- upsell (B5) */}
+          {/* Upsell is a build-time tool. Once the quote is out with the
+              customer, suggesting extra lines is offering something they cannot
+              be shown and the rep cannot add. */}
+          {editable && (
           <Card
             title="Upsell & Cross-Sell"
             subtitle="Ranked by co-purchase, floored by margin"
@@ -620,6 +629,7 @@ export default function QuotationBuilderPage({ params }: { params: Promise<{ id:
               </Note>
             </div>
           </Card>
+          )}
         </div>
       </div>
     </>
