@@ -10,8 +10,8 @@ from apps.accounts.auth import internal_auth
 from apps.accounts.models import Customer
 from apps.catalog.models import PriceList, UpsellSuggestionLog
 from apps.catalog.schemas import UpsellSuggestionOut
-from apps.common.enums import QuotationEventType
-from apps.common.errors import NotFound
+from apps.common.enums import QuotationEventType, Role
+from apps.common.errors import NotFound, PermissionDenied
 from apps.quotations import services
 from apps.quotations.models import Quotation
 from apps.quotations.schemas import (
@@ -74,6 +74,17 @@ def list_quotations(request, status: str | None = None, owner_rep_id: int | None
 
 @router.post("/", response=QuotationDetailOut)
 def create_quotation(request, payload: CreateQuotationIn):
+    # Building quotations is the Sales Rep's job. The brief splits the roles
+    # cleanly: the rep "builds quotations, applies discounts, adds upsell
+    # items", while the Sales Manager "reviews and approves or rejects" them and
+    # Finance "handles second level approvals". Letting a manager raise a quote
+    # would also let them raise one and then approve their own discount, which
+    # is the separation the approval chain exists to enforce.
+    if request.auth.role not in (Role.SALES_REP, Role.ADMIN):
+        raise PermissionDenied(
+            "Only Sales Reps and Admins can create quotations. Sales Managers and "
+            "Finance review and approve them instead."
+        )
     try:
         customer = Customer.objects.get(pk=payload.customer_id)
     except Customer.DoesNotExist:
