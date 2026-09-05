@@ -12,7 +12,7 @@ from datetime import datetime
 
 from ninja import Router, Schema
 
-from apps.accounts import analytics, businesses, staff
+from apps.accounts import analytics, businesses, plans, staff
 from apps.accounts.auth import internal_auth, require_role
 from apps.accounts.models import Customer, SalesTeam, User
 from apps.common.enums import Role
@@ -389,3 +389,105 @@ def change_user_role(request, user_id: int, payload: RoleIn):
 def list_teams(request):
     require_role(request, Role.ADMIN)
     return list(SalesTeam.objects.order_by("name"))
+
+
+# ================================================================= plans
+# Subscription plans are the billing policy every recurring order inherits.
+# Defining one is an admin act — see `plans.py` for why, and for the single
+# rule that refuses an edit rather than warning about it.
+
+
+class PlanOut(Schema):
+    id: int
+    name: str
+    interval: str
+    proration_mode: str
+    cancellation_policy: str
+    refund_mode: str
+    bill_in_advance: bool
+    is_active: bool
+    created_at: datetime
+
+    #: Usage, so "retire this plan" is never a decision made blind.
+    subscription_count: int = 0
+    active_subscription_count: int = 0
+    product_count: int = 0
+
+    #: The screen disables the interval field on this rather than letting the
+    #: admin pick a value the server is going to reject.
+    interval_locked: bool = False
+    policy_summary: list[str] = []
+    policy_warnings: list[str] = []
+
+    @staticmethod
+    def resolve_interval_locked(obj) -> bool:
+        return plans.live_subscription_count(obj) > 0
+
+    @staticmethod
+    def resolve_policy_summary(obj) -> list[str]:
+        return plans.policy_summary(obj)
+
+    @staticmethod
+    def resolve_policy_warnings(obj) -> list[str]:
+        return plans.policy_warnings(obj)
+
+
+class CreatePlanIn(Schema):
+    name: str
+    interval: str = "MONTHLY"
+    proration_mode: str = "DAILY"
+    cancellation_policy: str = "IMMEDIATE"
+    refund_mode: str = "PRORATED"
+    bill_in_advance: bool = True
+    is_active: bool = True
+
+
+class UpdatePlanIn(Schema):
+    """Every field optional — `None` means "leave this one alone"."""
+
+    name: str | None = None
+    interval: str | None = None
+    proration_mode: str | None = None
+    cancellation_policy: str | None = None
+    refund_mode: str | None = None
+    bill_in_advance: bool | None = None
+    is_active: bool | None = None
+
+
+@router.get("/plans", response=list[PlanOut])
+def list_plans(request, include_retired: bool = True):
+    """Every plan. Unlike `/subscriptions/plans`, retired ones are included —
+    an admin who cannot see a retired plan cannot bring it back."""
+    require_role(request, Role.ADMIN)
+    qs = plans.queryset()
+    if not include_retired:
+        qs = qs.filter(is_active=True)
+    return list(qs)
+
+
+@router.post("/plans", response=PlanOut)
+def create_plan(request, payload: CreatePlanIn):
+    """Define a new subscription plan. Live for reps as soon as it is active."""
+    require_role(request, Role.ADMIN)
+    return plans.create_plan(actor=request.auth, **payload.dict())
+
+
+@router.get("/plans/{plan_id}", response=PlanOut)
+def get_plan(request, plan_id: int):
+    require_role(request, Role.ADMIN)
+    return plans.get_plan(plan_id)
+
+
+@router.patch("/plans/{plan_id}", response=PlanOut)
+def update_plan(request, plan_id: int, payload: UpdatePlanIn):
+    require_role(request, Role.ADMIN)
+    return plans.update_plan(
+        plans.get_plan(plan_id), actor=request.auth, **payload.dict(exclude_unset=True)
+    )
+
+
+@router.post("/plans/{plan_id}/active", response=PlanOut)
+def set_plan_active(request, plan_id: int, payload: AccessIn):
+    """Retire a plan or restore it. Never deletes — the billing history points here."""
+    require_role(request, Role.ADMIN)
+    return plans.set_active(plans.get_plan(plan_id), enabled=payload.enabled, actor=request.auth)
