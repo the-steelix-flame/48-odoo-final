@@ -10,6 +10,7 @@ import {
   Button,
   Card,
   Cell,
+  EmptyState,
   ErrorState,
   Loading,
   Note,
@@ -23,8 +24,15 @@ import { date, money } from "@/lib/format";
 import { useApi } from "@/lib/useApi";
 import type { Allocation, FulfillmentPlan, Role, Warehouse } from "@/types";
 
-/** Mirrors `require_role(FINANCE, SALES_MANAGER)` on the backend; ADMIN is implicit there. */
-const MAY_OVERRIDE: Role[] = ["SALES_MANAGER", "FINANCE", "ADMIN"];
+/**
+ * Mirrors `require_role(FINANCE)` on the backend; ADMIN is implicit there.
+ * Accepting a split is not a read-only act — it moves stock into `reserved`,
+ * making it unavailable to every other open deal — so it carries the same
+ * guard as overriding one. The brief puts warehouse splits and backorder
+ * decisions with the Finance / Operations user.
+ */
+const MAY_MANAGE_FULFILMENT: Role[] = ["FINANCE", "ADMIN"];
+const NEEDS_FINANCE = "Only Finance or Admin can commit stock";
 
 type DraftRow = {
   key: string;
@@ -132,8 +140,8 @@ function OverrideModal({
     >
       <div className="w-full max-w-3xl rounded-xl border border-edge bg-surface shadow-2xl">
         <div className="border-b border-edge px-5 py-4">
-          <h2 className="text-base font-semibold text-slate-100">Manual override</h2>
-          <p className="mt-1 text-xs text-slate-400">
+          <h2 className="text-base font-semibold text-[#0F172A]">Manual override</h2>
+          <p className="mt-1 text-xs text-[#64748B]">
             You decide who ships what. The override is recorded against your name — overrides are
             allowed, unrecorded overrides are not.
           </p>
@@ -142,8 +150,8 @@ function OverrideModal({
         <div className="space-y-4 px-5 py-4">
           {error && <ErrorState message={error} />}
 
-          <div className="rounded-lg border border-edge bg-black/20 px-4 py-3">
-            <p className="mb-2 text-xs uppercase tracking-wide text-slate-400">
+          <div className="rounded-lg border border-edge bg-[#F8FAFC] px-4 py-3">
+            <p className="mb-2 text-xs uppercase tracking-wide text-[#64748B]">
               Ordered quantities
             </p>
             <ul className="space-y-1 text-sm">
@@ -152,8 +160,8 @@ function OverrideModal({
                 const ok = got === l.ordered;
                 return (
                   <li key={l.id} className="flex items-center justify-between gap-3">
-                    <span className="text-slate-300">{l.description}</span>
-                    <span className={ok ? "text-emerald-400" : "text-amber-400"}>
+                    <span className="text-[#475569]">{l.description}</span>
+                    <span className={ok ? "text-emerald-600" : "text-amber-600"}>
                       {got} / {l.ordered} allocated
                     </span>
                   </li>
@@ -204,7 +212,7 @@ function OverrideModal({
                   <button
                     type="button"
                     onClick={() => setRows((prev) => prev.filter((x) => x.key !== r.key))}
-                    className="text-xs text-slate-400 underline hover:text-red-400"
+                    className="text-xs text-[#64748B] underline hover:text-red-600"
                   >
                     Remove
                   </button>
@@ -261,7 +269,7 @@ export default function FulfillmentDetailPage({ params }: { params: Promise<{ id
   const backorders = data.allocations.filter((a) => a.is_backorder);
   const shipping = data.allocations.filter((a) => !a.is_backorder);
   const canAccept = data.status === "SUGGESTED" || data.status === "OVERRIDDEN";
-  const mayOverride = role !== null && MAY_OVERRIDE.includes(role);
+  const mayManage = role !== null && MAY_MANAGE_FULFILMENT.includes(role);
 
   async function run(path: string, fallback: string) {
     setBusy(true);
@@ -298,18 +306,18 @@ export default function FulfillmentDetailPage({ params }: { params: Promise<{ id
 
       <div className="mb-6 grid gap-4 sm:grid-cols-3">
         <div className="rounded-xl border border-edge bg-surface p-5">
-          <p className="text-xs uppercase tracking-wide text-slate-400">Shipments</p>
-          <p className="mt-2 text-2xl font-semibold text-slate-100">{data.estimated_shipments}</p>
+          <p className="text-xs uppercase tracking-wide text-[#64748B]">Shipments</p>
+          <p className="mt-2 text-2xl font-semibold text-[#0F172A]">{data.estimated_shipments}</p>
           <p className="mt-1 text-xs text-slate-500">Minimised first, then cost</p>
         </div>
         <div className="rounded-xl border border-edge bg-surface p-5">
-          <p className="text-xs uppercase tracking-wide text-slate-400">Estimated cost</p>
-          <p className="mt-2 text-2xl font-semibold text-slate-100">{money(data.estimated_cost)}</p>
+          <p className="text-xs uppercase tracking-wide text-[#64748B]">Estimated cost</p>
+          <p className="mt-2 text-2xl font-semibold text-[#0F172A]">{money(data.estimated_cost)}</p>
           <p className="mt-1 text-xs text-slate-500">Base cost × warehouse weight</p>
         </div>
         <div className="rounded-xl border border-edge bg-surface p-5">
-          <p className="text-xs uppercase tracking-wide text-slate-400">Backordered lines</p>
-          <p className="mt-2 text-2xl font-semibold text-slate-100">{backorders.length}</p>
+          <p className="text-xs uppercase tracking-wide text-[#64748B]">Backordered lines</p>
+          <p className="mt-2 text-2xl font-semibold text-[#0F172A]">{backorders.length}</p>
           <p className="mt-1 text-xs text-slate-500">
             {backorders.length === 0 ? "Fully covered by stock" : "Awaiting restock"}
           </p>
@@ -322,19 +330,21 @@ export default function FulfillmentDetailPage({ params }: { params: Promise<{ id
         actions={
           canAccept ? (
             <>
-              <Button
-                onClick={() =>
-                  run(`/fulfillment/plans/${id}/accept`, "Could not accept the split")
-                }
-                disabled={busy}
-              >
-                Accept Suggested Split
-              </Button>
-              <span title={mayOverride ? undefined : "Needs Sales Manager, Finance or Admin"}>
+              <span title={mayManage ? undefined : NEEDS_FINANCE}>
+                <Button
+                  onClick={() =>
+                    run(`/fulfillment/plans/${id}/accept`, "Could not accept the split")
+                  }
+                  disabled={busy || !mayManage || data.allocations.length === 0}
+                >
+                  Accept Suggested Split
+                </Button>
+              </span>
+              <span title={mayManage ? undefined : NEEDS_FINANCE}>
                 <Button
                   variant="secondary"
                   onClick={() => setOverriding(true)}
-                  disabled={busy || !mayOverride || !warehouses?.length}
+                  disabled={busy || !mayManage || !warehouses?.length || data.allocations.length === 0}
                 >
                   Manual Override
                 </Button>
@@ -343,14 +353,20 @@ export default function FulfillmentDetailPage({ params }: { params: Promise<{ id
           ) : null
         }
       >
+        {data.allocations.length === 0 ? (
+          <EmptyState
+            title="Nothing on this order needs shipping"
+            hint="Every line is a subscription or service, so there is no physical stock to allocate. Billing still runs on its own schedule."
+          />
+        ) : (
         <Table columns={["Warehouse", "Line", "Qty Fulfilled", "Promised", "Shipped", "Status"]}>
           {[...shipping, ...backorders].map((allocation) => (
             <Row key={allocation.id}>
-              <Cell className="font-medium text-slate-100">{allocation.warehouse_name}</Cell>
+              <Cell className="font-medium text-[#0F172A]">{allocation.warehouse_name}</Cell>
               <Cell>{allocation.line_description}</Cell>
               <Cell>{allocation.quantity} units</Cell>
-              <Cell className="text-slate-400">{date(allocation.promised_date)}</Cell>
-              <Cell className="text-slate-400">{date(allocation.shipped_at)}</Cell>
+              <Cell className="text-[#64748B]">{date(allocation.promised_date)}</Cell>
+              <Cell className="text-[#64748B]">{date(allocation.shipped_at)}</Cell>
               <Cell>
                 {allocation.is_backorder ? (
                   <Badge tone="red">Backorder</Badge>
@@ -361,19 +377,20 @@ export default function FulfillmentDetailPage({ params }: { params: Promise<{ id
             </Row>
           ))}
         </Table>
+        )}
 
         <div className="mt-4 space-y-2">
           {data.consolidation_available && (
-            <div className="rounded-lg border border-emerald-800 bg-emerald-950/30 px-4 py-3">
-              <p className="text-sm text-emerald-300">
+            <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3">
+              <p className="text-sm text-emerald-700">
                 Stock has arrived — the remaining backorder can now be filled.
               </p>
               <div className="mt-2">
-                <span title={mayOverride ? undefined : "Needs Sales Manager, Finance or Admin"}>
+                <span title={mayManage ? undefined : NEEDS_FINANCE}>
                   <Button
                     variant="success"
                     className="!px-3 !py-1 text-xs"
-                    disabled={busy || !mayOverride}
+                    disabled={busy || !mayManage}
                     onClick={() =>
                       run(
                         `/fulfillment/plans/${id}/consolidate`,

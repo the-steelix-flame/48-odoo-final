@@ -49,6 +49,14 @@ class ApprovalRowOut(Schema):
     current_stage: str | None = None
     assigned_to: str | None = None
     created_at: datetime
+    #: The FULL ordered chain, e.g. ["SALES_MANAGER", "FINANCE"]. Screen 5 used to
+    #: render only `current_stage`, so a HIGH-risk quote looked like it was going
+    #: to the Sales Manager and stopping there — Finance was in the chain but
+    #: invisible. The brief is explicit that HIGH means "Sales manager THEN
+    #: finance", so the whole chain has to be visible.
+    chain: list[str] = []
+    current_step_number: int | None = None
+    total_steps: int = 0
 
     @staticmethod
     def resolve_quotation_number(obj) -> str:
@@ -70,6 +78,25 @@ class ApprovalRowOut(Schema):
         if isinstance(obj, dict):
             return obj["customer_tier"]
         return obj.quotation.customer.tier
+
+    @staticmethod
+    def resolve_chain(obj) -> list[str]:
+        if isinstance(obj, dict):
+            return obj.get("chain", [])
+        return [s.role_required for s in obj.steps.all().order_by("sequence")]
+
+    @staticmethod
+    def resolve_total_steps(obj) -> int:
+        if isinstance(obj, dict):
+            return obj.get("total_steps", 0)
+        return obj.steps.count()
+
+    @staticmethod
+    def resolve_current_step_number(obj) -> int | None:
+        if isinstance(obj, dict):
+            return obj.get("current_step_number")
+        step = obj.current_step
+        return step.sequence if step else None
 
     @staticmethod
     def resolve_current_stage(obj) -> str | None:
@@ -152,6 +179,9 @@ def get_approval(request, request_id: int):
         assigned_to=(step.assignee.full_name or step.assignee.email)
         if step and step.assignee_id
         else None,
+        chain=[st.role_required for st in approval.steps.order_by("sequence")],
+        total_steps=approval.steps.count(),
+        current_step_number=step.sequence if step else None,
         steps=list(approval.steps.select_related("assignee", "acted_by")),
         risk=risk_breakdown(quotation),
         audit_trail=list(quotation.events.select_related("actor")),

@@ -207,6 +207,12 @@ band = NONE                        if not requires_approval
 The chain for a band is then read from `approval_rule` — `[]`, `["SALES_MANAGER"]`, or
 `["SALES_MANAGER", "FINANCE"]`.
 
+> **HIGH is a two-stage chain.** The Sales Manager reviews first; Finance's step stays `PENDING`
+> and unreachable until step 1 is approved. Matches screen 18, "Over limit, blended high risk →
+> Sales manager then finance". `act()` walks the steps in sequence, so Finance cannot approve
+> ahead of the manager, and a rejection or return at step 1 closes the request without Finance
+> ever seeing it.
+
 ### Worked example — the brief's own scenario
 
 Gold customer (tier ceiling 15%). Hardware ceiling 15%, Services ceiling 10%.

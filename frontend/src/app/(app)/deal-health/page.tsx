@@ -97,22 +97,22 @@ export default function DealHealthPage() {
                 <Cell>
                   <button
                     onClick={() => router.push(`/quotations/${alert.quotation_id}`)}
-                    className="font-medium text-brand hover:underline"
+                    className="font-heading font-medium text-[#0891B2] hover:underline"
                   >
                     {alert.quotation_number}
                   </button>
                 </Cell>
                 <Cell>{alert.customer_name}</Cell>
                 <Cell>
-                  <span className="text-slate-300">{alert.message}</span>
-                  <span className="ml-2 text-xs text-slate-500">
+                  <span className="text-[#334155]">{alert.message}</span>
+                  <span className="ml-[8px] text-[11px] text-[#64748B]">
                     {titleCase(alert.alert_type)}
                   </span>
                 </Cell>
                 <Cell>
                   <Badge tone={SEVERITY_TONE[alert.severity]}>{titleCase(alert.severity)}</Badge>
                 </Cell>
-                <Cell className="text-slate-400">{dateTime(alert.detected_at)}</Cell>
+                <Cell className="text-[#64748B]">{dateTime(alert.detected_at)}</Cell>
                 <Cell>
                   <div className="flex gap-2">
                     <Button

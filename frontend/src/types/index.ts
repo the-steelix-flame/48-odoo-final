@@ -364,6 +364,15 @@ export interface ApprovalRow {
   current_stage?: Role | null;
   assigned_to?: string | null;
   created_at: string;
+  /**
+   * The FULL ordered approval chain, e.g. ["SALES_MANAGER", "FINANCE"].
+   * Screen 5 previously showed only `current_stage`, so a HIGH-risk quote read
+   * as "Sales Manager" and Finance looked like it was never involved — even
+   * though the brief requires HIGH to be Sales Manager THEN Finance.
+   */
+  chain: Role[];
+  current_step_number?: number | null;
+  total_steps: number;
 }
 
 export interface ApprovalDetail extends ApprovalRow {
@@ -645,4 +654,38 @@ export interface PortalQuotation {
   requests: PortalRequest[];
   /** Non-null with a counter_discount_percent means it's the customer's move. */
   open_request?: PortalRequest | null;
+}
+
+// ---------------------------------------------- negotiation (internal inbox)
+/** A customer counter-offer as the REP sees it — carries the deal it belongs
+ *  to, which the customer-facing `PortalRequest` does not need. */
+export interface InternalNegotiationRequest {
+  id: number;
+  quotation_id: number;
+  quotation_number: string;
+  customer_name: string;
+  requested_discount_percent?: string | null;
+  requested_delivery_date?: string | null;
+  message: string;
+  status: "SUBMITTED" | "ACCEPTED" | "REJECTED" | "COUNTERED";
+  resolution_note: string;
+  created_at: string;
+}
+
+/** What `POST /portal/internal/requests/{id}/accept` hands back. The important
+ *  field is `re_entered_approval` — accepting a counter re-runs the risk engine
+ *  and may reopen approval automatically. */
+export interface NegotiationAcceptResult {
+  quotation_id: number;
+  status: QuotationStatus;
+  risk_band: RiskBand;
+  blended_risk_score: string;
+  re_entered_approval: boolean;
+}
+
+/** `GET /insights/reports/invoices` — the Finance cash view. */
+export interface InvoiceReport {
+  outstanding: string;
+  collected: string;
+  overdue: number;
 }

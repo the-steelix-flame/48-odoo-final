@@ -2,7 +2,7 @@
 
 /** Screen 3 — Quotations list / Kanban pipeline.  Owner: the-steelix-flame. */
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import { ApiError, post } from "@/lib/api";
@@ -29,6 +29,16 @@ export default function QuotationsPage() {
   const router = useRouter();
   const [view, setView] = useState<"kanban" | "table">("kanban");
   const [creating, setCreating] = useState(false);
+
+  // The dashboard's "+ New Quotation" links here with ?new=1. Without this the
+  // panel stayed shut and the user had to press New Quotation a second time.
+  // Read on mount rather than with useSearchParams so the page can still be
+  // statically prerendered without a Suspense boundary.
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get("new") === "1") {
+      setCreating(true);
+    }
+  }, []);
   const [customerId, setCustomerId] = useState<string>("");
   const [createError, setCreateError] = useState<string | null>(null);
 
@@ -95,7 +105,7 @@ export default function QuotationsPage() {
                 Create
               </Button>
             </div>
-            {createError && <p className="mt-3 text-sm text-rose-300">{createError}</p>}
+            {createError && <p className="mt-3 text-sm text-rose-700">{createError}</p>}
           </Card>
         </div>
       )}
@@ -106,32 +116,32 @@ export default function QuotationsPage() {
           hint="Create one above, or run `python manage.py seed_demo` for the demo pipeline."
         />
       ) : view === "kanban" ? (
-        <div className="grid gap-4 md:grid-cols-3 xl:grid-cols-5">
+        <div className="grid gap-[16px] md:grid-cols-3 xl:grid-cols-5 animate-dfIn">
           {PIPELINE_STAGES.map((stage) => {
             const cards = quotations.filter((q) => q.status === stage.status);
             return (
               <div
                 key={stage.status}
-                className="rounded-xl border border-edge bg-surface/60 p-3"
+                className="rounded-[12px] border border-[#E2E8F0] bg-[#F8FAFC] p-[16px]"
               >
-                <div className="mb-3 flex items-center justify-between">
-                  <h2 className="text-sm font-medium text-slate-200">{stage.label}</h2>
-                  <span className="text-xs text-slate-500">{cards.length}</span>
+                <div className="mb-[16px] flex items-center justify-between">
+                  <h2 className="font-heading text-[15px] font-semibold tracking-[-0.01em] text-[#0F172A]">{stage.label}</h2>
+                  <span className="flex h-[22px] items-center justify-center rounded-[6px] bg-[#E2E8F0] px-[8px] font-mono text-[11px] font-medium text-[#475569]">{cards.length}</span>
                 </div>
-                <div className="space-y-2">
+                <div className="space-y-[12px]">
                   {cards.map((quotation) => (
                     <button
                       key={quotation.id}
                       onClick={() => router.push(`/quotations/${quotation.id}`)}
-                      className="w-full rounded-lg border border-edge bg-black/30 p-3 text-left transition hover:border-slate-500"
+                      className="group w-full rounded-[10px] border border-[#E2E8F0] bg-white p-[16px] text-left shadow-[0_1px_2px_rgba(0,0,0,0.03)] transition hover:-translate-y-[2px] hover:border-[#0891B2] hover:shadow-[0_8px_20px_-8px_rgba(8,145,178,0.2)]"
                     >
-                      <p className="text-sm font-medium text-slate-100">
+                      <p className="font-heading text-[14px] font-semibold text-[#0F172A] transition-colors group-hover:text-[#0891B2]">
                         {quotation.customer_name}
                       </p>
-                      <p className="mt-0.5 text-xs text-slate-400">
+                      <p className="mt-[4px] font-mono text-[11px] text-[#64748B]">
                         {quotation.number} · {money(quotation.total, quotation.currency)}
                       </p>
-                      <div className="mt-2 flex flex-wrap gap-1.5">
+                      <div className="mt-[12px] flex flex-wrap gap-[6px]">
                         <Badge tone={RISK_TONE[quotation.risk_band]}>
                           {quotation.risk_band === "NONE" ? "No approval" : quotation.risk_band}
                         </Badge>
@@ -142,7 +152,7 @@ export default function QuotationsPage() {
                     </button>
                   ))}
                   {cards.length === 0 && (
-                    <p className="py-6 text-center text-xs text-slate-600">Empty</p>
+                    <p className="py-[24px] text-center text-[13px] text-[#94A3B8]">Empty</p>
                   )}
                 </div>
               </div>
@@ -156,7 +166,7 @@ export default function QuotationsPage() {
           >
             {quotations.map((quotation) => (
               <Row key={quotation.id} onClick={() => router.push(`/quotations/${quotation.id}`)}>
-                <Cell className="font-medium text-slate-100">{quotation.number}</Cell>
+                <Cell className="font-heading font-medium text-[#0F172A]">{quotation.number}</Cell>
                 <Cell>{quotation.customer_name}</Cell>
                 <Cell>{quotation.customer_tier}</Cell>
                 <Cell>{quotation.owner_rep_name}</Cell>
@@ -171,7 +181,7 @@ export default function QuotationsPage() {
                   </Badge>
                 </Cell>
                 <Cell>{percent(quotation.margin_percent)}</Cell>
-                <Cell className="font-medium text-slate-100">
+                <Cell className="font-medium text-[#0F172A]">
                   {money(quotation.total, quotation.currency)}
                 </Cell>
               </Row>

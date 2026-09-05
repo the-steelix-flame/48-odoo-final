@@ -12,7 +12,8 @@
 import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 
-import { TopNav } from "@/components/shell/TopNav";
+import { Sidebar } from "@/components/shell/Sidebar";
+import { Header } from "@/components/shell/Header";
 import { Loading } from "@/components/ui";
 import { useAuth } from "@/lib/auth";
 import { INTERNAL_ROLES } from "@/types";
@@ -35,9 +36,14 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <div className="min-h-screen">
-      <TopNav />
-      <main className="mx-auto max-w-[1600px] px-4 py-8">{children}</main>
+    <div className="flex min-h-screen items-stretch">
+      <Sidebar />
+      <div className="flex min-w-0 flex-1 flex-col bg-[radial-gradient(1200px_600px_at_88%_-12%,#E3EEF2_0%,#F8FAFC_60%)]">
+        <Header />
+        <main className="flex-1 p-[30px_26px_60px]">
+          {children}
+        </main>
+      </div>
     </div>
   );
 }

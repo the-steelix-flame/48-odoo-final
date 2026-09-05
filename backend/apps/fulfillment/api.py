@@ -175,14 +175,22 @@ def get_plan(request, plan_id: int):
 
 @router.post("/plans/{plan_id}/accept", response=PlanOut)
 def accept_plan(request, plan_id: int):
-    """Accept Suggested Split — reserves the stock."""
+    """Accept Suggested Split — reserves the stock.
+
+    Finance/Ops only. The brief puts warehouse splits and backorder decisions
+    with the Finance / Operations user, and accepting a split COMMITS stock:
+    it moves quantity into `reserved`, which makes it unavailable to every other
+    open deal. That is the same weight of decision as overriding the split, so
+    it carries the same guard rather than being open to any signed-in user.
+    """
+    require_role(request, Role.FINANCE)
     return services.accept_plan(_get_plan(plan_id), actor=request.auth)
 
 
 @router.post("/plans/{plan_id}/override", response=PlanOut)
 def override_plan(request, plan_id: int, payload: OverrideIn):
     """Manual Override — a named human decides who ships what."""
-    require_role(request, Role.FINANCE, Role.SALES_MANAGER)
+    require_role(request, Role.FINANCE)
     return services.override_plan(
         _get_plan(plan_id), [row.dict() for row in payload.allocations], actor=request.auth
     )
@@ -195,14 +203,14 @@ def consolidate_plan(request, plan_id: int):
     Only reachable once a RESTOCK has set `consolidation_available`; the prompt
     exists because stock arrived, not because someone refreshed.
     """
-    require_role(request, Role.FINANCE, Role.SALES_MANAGER)
+    require_role(request, Role.FINANCE)
     return services.consolidate_backorders(_get_plan(plan_id), actor=request.auth)
 
 
 @router.post("/stock/{stock_item_id}/restock", response=StockRowOut)
 def restock(request, stock_item_id: int, payload: RestockIn):
     """Receive stock. Fires the backorder-consolidation check as a side effect."""
-    require_role(request, Role.FINANCE, Role.SALES_MANAGER)
+    require_role(request, Role.FINANCE)
     try:
         item = StockItem.objects.select_related("warehouse", "product").get(pk=stock_item_id)
     except StockItem.DoesNotExist:

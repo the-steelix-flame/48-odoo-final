@@ -103,8 +103,8 @@ export function RepNegotiationPanel({
 
       {/* ------------------------------------------- their open request */}
       {awaitingUs && (
-        <div className="mt-5 rounded-lg border border-amber-800 bg-amber-950/20 p-4">
-          <p className="text-sm text-amber-200">
+        <div className="mt-5 rounded-lg border border-[#FDE68A] bg-[#FFFBEB] p-4">
+          <p className="text-sm text-[#92400E]">
             {open?.requested_discount_percent
               ? `${data.customer_name} is asking for ${percent(open.requested_discount_percent, 0)} across the order.`
               : `${data.customer_name} has sent a request.`}

@@ -40,8 +40,8 @@ export function NegotiationThread({
   if (entries.length === 0) {
     return (
       <div className="rounded-lg border border-dashed border-edge py-10 text-center">
-        <p className="text-sm text-slate-400">No messages yet</p>
-        {emptyHint && <p className="mt-1 text-xs text-slate-500">{emptyHint}</p>}
+        <p className="text-sm text-[#64748B]">No messages yet</p>
+        {emptyHint && <p className="mt-1 text-xs text-[#94A3B8]">{emptyHint}</p>}
       </div>
     );
   }
@@ -62,25 +62,25 @@ export function NegotiationThread({
             key={index}
             className={`rounded-lg border p-3 ${
               mine
-                ? "border-edge bg-black/20"
-                : "border-blue-900/60 bg-blue-950/20"
+                ? "border-edge bg-[#F8FAFC]"
+                : "border-[#BAE6FD] bg-[#F0F9FF]"
             }`}
           >
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="flex flex-wrap items-center gap-2">
-                <span className="text-xs font-medium text-slate-300">{who}</span>
+                <span className="text-xs font-medium text-[#334155]">{who}</span>
                 {meta.label && <Badge tone={meta.tone}>{meta.label}</Badge>}
                 {entry.line_description && (
-                  <span className="text-xs text-slate-500">
+                  <span className="text-xs text-[#94A3B8]">
                     on {entry.line_description}
                   </span>
                 )}
               </div>
-              <span className="text-xs text-slate-500">{dateTime(entry.created_at)}</span>
+              <span className="text-xs text-[#94A3B8]">{dateTime(entry.created_at)}</span>
             </div>
 
             {entry.discount_percent != null && (
-              <p className="mt-2 text-sm text-slate-100">
+              <p className="mt-2 text-sm text-[#0F172A]">
                 {entry.kind === "COUNTER_REQUEST" && "Requested "}
                 {entry.kind === "REP_COUNTER" && "Offered "}
                 {entry.kind === "ACCEPTED" && "Agreed at "}
@@ -90,13 +90,13 @@ export function NegotiationThread({
             )}
 
             {entry.delivery_date && (
-              <p className="mt-1 text-xs text-slate-400">
+              <p className="mt-1 text-xs text-[#64748B]">
                 Requested delivery by {date(entry.delivery_date)}
               </p>
             )}
 
             {entry.body && (
-              <p className="mt-2 whitespace-pre-wrap text-sm text-slate-200">{entry.body}</p>
+              <p className="mt-2 whitespace-pre-wrap text-sm text-[#334155]">{entry.body}</p>
             )}
           </li>
         );

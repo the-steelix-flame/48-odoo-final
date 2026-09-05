@@ -50,7 +50,7 @@ export default function ApprovalsPage() {
         <Badge tone="green">{counts?.approved ?? 0} Approved</Badge>
         <button
           onClick={() => setPendingOnly((value) => !value)}
-          className="rounded-lg border border-edge px-3 py-0.5 text-xs text-slate-300 hover:bg-white/5"
+          className="rounded-lg border border-edge px-3 py-0.5 text-xs text-[#475569] hover:bg-white/5"
         >
           {pendingOnly ? "Show all" : "Filter: Pending only"}
         </button>
@@ -68,7 +68,7 @@ export default function ApprovalsPage() {
           >
             {rows.map((row) => (
               <Row key={row.id} onClick={() => router.push(`/approvals/${row.id}`)}>
-                <Cell className="font-medium text-slate-100">{row.quotation_number}</Cell>
+                <Cell className="font-heading font-medium text-[#0F172A]">{row.quotation_number}</Cell>
                 <Cell>{row.customer_name}</Cell>
                 <Cell>{row.customer_tier}</Cell>
                 <Cell>
@@ -76,7 +76,33 @@ export default function ApprovalsPage() {
                     {row.risk_band} · {row.risk_score}
                   </Badge>
                 </Cell>
-                <Cell>{row.current_stage ? titleCase(row.current_stage) : "—"}</Cell>
+                <Cell>
+                  {row.chain.length === 0 ? (
+                    <span className="text-slate-500">Auto-approved</span>
+                  ) : (
+                    <span className="flex flex-wrap items-center gap-1">
+                      {row.chain.map((role, index) => (
+                        <span key={role} className="flex items-center gap-1">
+                          {index > 0 && <span className="text-slate-600">&rarr;</span>}
+                          <span
+                            className={
+                              index + 1 === row.current_step_number
+                                ? "font-semibold text-amber-700"
+                                : "text-slate-500"
+                            }
+                          >
+                            {titleCase(role)}
+                          </span>
+                        </span>
+                      ))}
+                      {row.total_steps > 1 && row.current_step_number ? (
+                        <span className="ml-1 text-xs text-slate-500">
+                          ({row.current_step_number} of {row.total_steps})
+                        </span>
+                      ) : null}
+                    </span>
+                  )}
+                </Cell>
                 <Cell>{row.assigned_to ?? "—"}</Cell>
                 <Cell>
                   <Badge
@@ -91,7 +117,7 @@ export default function ApprovalsPage() {
                     {titleCase(row.status)}
                   </Badge>
                 </Cell>
-                <Cell className="text-slate-400">{dateTime(row.created_at)}</Cell>
+                <Cell className="text-[#64748B]">{dateTime(row.created_at)}</Cell>
               </Row>
             ))}
           </Table>

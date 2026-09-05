@@ -10,6 +10,7 @@
  */
 
 import { use, useState } from "react";
+import type { KeyboardEvent } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 
@@ -34,11 +35,38 @@ import { RISK_TONE, STATUS_TONE, dateTime, money, percent, titleCase } from "@/l
 import { useApi } from "@/lib/useApi";
 import type { Product, QuotationDetail, UpsellSuggestion } from "@/types";
 
+/**
+ * Enter commits the value by blurring the field, which fires the same onBlur
+ * handler a click-away would. One code path, so typing 17 and pressing Enter
+ * cannot produce a different result from typing 17 and clicking elsewhere.
+ */
+function commitOnEnter(event: KeyboardEvent<HTMLInputElement>) {
+  if (event.key === "Enter") {
+    event.preventDefault();
+    event.currentTarget.blur();
+  }
+}
+
+/**
+ * Clearing a number input to retype it leaves `value === ""`, and `Number("")`
+ * is 0 — so a blur mid-edit used to PATCH `quantity: ""`, which the backend
+ * rejects. Treat blank or unparseable as "no change" and put the saved value
+ * back, so the field can never sit showing something that was never saved.
+ */
+function committedNumber(raw: string, fallback: string): string | null {
+  const trimmed = raw.trim();
+  if (trimmed === "") return null;
+  const parsed = Number(trimmed);
+  if (!Number.isFinite(parsed)) return null;
+  return parsed === Number(fallback) ? null : trimmed;
+}
+
 export default function QuotationBuilderPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const router = useRouter();
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [savedAt, setSavedAt] = useState<string | null>(null);
   const [addProductId, setAddProductId] = useState("");
 
   const { data, error, loading, reload, setData } = useApi<QuotationDetail>(`/quotations/${id}`);
@@ -52,6 +80,21 @@ export default function QuotationBuilderPage({ params }: { params: Promise<{ id:
   if (!data) return null;
 
   const editable = ["DRAFT", "UNDER_NEGOTIATION", "REJECTED"].includes(data.status);
+
+  /**
+   * A quote locks the moment it leaves the rep's hands. Until now the inputs
+   * simply went disabled with nothing saying why, which reads as "the quantity
+   * box is broken" rather than "this quote is past editing".
+   */
+  const lockedReason = editable
+    ? ""
+    : data.status === "PENDING_APPROVAL"
+      ? "This quote is out for approval. Lines are frozen until an approver returns it."
+      : data.status === "APPROVED"
+        ? "This quote is approved. Editing a line now would invalidate the approval it was granted on — return it first to make changes."
+        : data.status === "SENT"
+          ? "This quote is with the customer. They can counter from the portal, which reopens it for edits."
+          : `This quote is ${titleCase(data.status).toLowerCase()} and can no longer be edited.`;
 
   /** Every mutation replaces local state with the backend's recomputed truth. */
   async function run(fn: () => Promise<QuotationDetail>) {
@@ -83,7 +126,33 @@ export default function QuotationBuilderPage({ params }: { params: Promise<{ id:
   const removeLine = (lineId: number) =>
     run(() => del<QuotationDetail>(`/quotations/${id}/lines/${lineId}`));
 
+  /**
+   * Quantity and discount inputs commit on blur or Enter, so a value the user
+   * is still sitting in has not been sent yet. Blurring first makes that PATCH
+   * fire before we act, otherwise clicking straight from a half-typed discount
+   * to Submit would route the quote on the previous number.
+   */
+  function flushPendingEdit() {
+    const active = document.activeElement as HTMLElement | null;
+    if (active && typeof active.blur === "function") active.blur();
+  }
+
+  async function saveDraft() {
+    flushPendingEdit();
+    setBusy(true);
+    setActionError(null);
+    try {
+      setData(await post<QuotationDetail>(`/quotations/${id}/save-draft`));
+      setSavedAt(new Date().toLocaleTimeString());
+    } catch (err) {
+      setActionError(err instanceof ApiError ? err.message : "Could not save the draft");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function submitForApproval() {
+    flushPendingEdit();
     setBusy(true);
     setActionError(null);
     try {
@@ -117,6 +186,12 @@ export default function QuotationBuilderPage({ params }: { params: Promise<{ id:
       {actionError && (
         <div className="mb-4">
           <ErrorState message={actionError} />
+        </div>
+      )}
+
+      {!editable && (
+        <div className="mb-4">
+          <Note>Read-only — {lockedReason}</Note>
         </div>
       )}
 
@@ -162,7 +237,7 @@ export default function QuotationBuilderPage({ params }: { params: Promise<{ id:
               >
                 {data.lines.map((line) => (
                   <Row key={line.id}>
-                    <Cell className="font-medium text-slate-100">
+                    <Cell className="font-medium text-[#0F172A]">
                       {line.description}
                       <span className="ml-2 text-xs text-slate-500">{line.category_name}</span>
                     </Cell>
@@ -175,13 +250,24 @@ export default function QuotationBuilderPage({ params }: { params: Promise<{ id:
                       <input
                         type="number"
                         min="1"
+                        step="1"
                         disabled={!editable || busy}
+                        title={editable ? undefined : lockedReason}
                         className={`${inputClass} w-20`}
+                        // Keyed on the saved value so a rejected or clamped
+                        // edit snaps back to what the server actually holds,
+                        // instead of leaving the typed number on screen.
+                        key={`qty-${line.id}-${line.quantity}`}
                         defaultValue={Number(line.quantity)}
-                        onBlur={(e) =>
-                          Number(e.target.value) !== Number(line.quantity) &&
-                          updateLine(line.id, { quantity: e.target.value })
-                        }
+                        onKeyDown={commitOnEnter}
+                        onBlur={(e) => {
+                          const next = committedNumber(e.target.value, line.quantity);
+                          if (next === null) {
+                            e.target.value = String(Number(line.quantity));
+                            return;
+                          }
+                          updateLine(line.id, { quantity: next });
+                        }}
                       />
                     </Cell>
                     <Cell>{money(line.unit_price, data.currency)}</Cell>
@@ -191,15 +277,22 @@ export default function QuotationBuilderPage({ params }: { params: Promise<{ id:
                         min="0"
                         max="100"
                         disabled={!editable || busy}
+                        title={editable ? undefined : lockedReason}
                         className={`${inputClass} w-20`}
+                        key={`disc-${line.id}-${line.discount_percent}`}
                         defaultValue={Number(line.discount_percent)}
-                        onBlur={(e) =>
-                          Number(e.target.value) !== Number(line.discount_percent) &&
-                          updateLine(line.id, { discount_percent: e.target.value })
-                        }
+                        onKeyDown={commitOnEnter}
+                        onBlur={(e) => {
+                          const next = committedNumber(e.target.value, line.discount_percent);
+                          if (next === null) {
+                            e.target.value = String(Number(line.discount_percent));
+                            return;
+                          }
+                          updateLine(line.id, { discount_percent: next });
+                        }}
                       />
                     </Cell>
-                    <Cell className="text-slate-400">
+                    <Cell className="text-[#64748B]">
                       {percent(line.allowed_discount_percent, 0)}
                     </Cell>
                     <Cell>
@@ -211,7 +304,7 @@ export default function QuotationBuilderPage({ params }: { params: Promise<{ id:
                         <Badge tone="green">OK</Badge>
                       )}
                     </Cell>
-                    <Cell className="font-medium text-slate-100">
+                    <Cell className="font-medium text-[#0F172A]">
                       {money(line.line_total, data.currency)}
                     </Cell>
                     <Cell>
@@ -219,7 +312,7 @@ export default function QuotationBuilderPage({ params }: { params: Promise<{ id:
                         <button
                           onClick={() => removeLine(line.id)}
                           disabled={busy}
-                          className="text-xs text-rose-400 hover:text-rose-300"
+                          className="text-xs text-rose-600 hover:text-rose-700"
                         >
                           Remove
                         </button>
@@ -259,8 +352,8 @@ export default function QuotationBuilderPage({ params }: { params: Promise<{ id:
                   <Row key={event.id}>
                     <Cell>{event.actor_name}</Cell>
                     <Cell>{titleCase(event.event_type)}</Cell>
-                    <Cell className="text-slate-400">{dateTime(event.created_at)}</Cell>
-                    <Cell className="text-slate-400">{event.note || "—"}</Cell>
+                    <Cell className="text-[#64748B]">{dateTime(event.created_at)}</Cell>
+                    <Cell className="text-[#64748B]">{event.note || "—"}</Cell>
                   </Row>
                 ))}
               </Table>
@@ -278,24 +371,24 @@ export default function QuotationBuilderPage({ params }: { params: Promise<{ id:
                 ["Tax", money(data.tax_total, data.currency)],
               ].map(([label, value]) => (
                 <div key={label} className="flex justify-between">
-                  <dt className="text-slate-400">{label}</dt>
-                  <dd className="text-slate-200">{value}</dd>
+                  <dt className="text-[#64748B]">{label}</dt>
+                  <dd className="text-[#334155]">{value}</dd>
                 </div>
               ))}
               <div className="flex justify-between border-t border-edge pt-2 text-base font-semibold">
-                <dt className="text-slate-300">Total</dt>
-                <dd className="text-slate-100">{money(data.total, data.currency)}</dd>
+                <dt className="text-[#475569]">Total</dt>
+                <dd className="text-[#0F172A]">{money(data.total, data.currency)}</dd>
               </div>
             </dl>
 
             <div className="mt-4">
               <p className="mb-1.5 flex justify-between text-xs">
-                <span className="text-slate-400">Live margin</span>
-                <span className="text-slate-200">
+                <span className="text-[#64748B]">Live margin</span>
+                <span className="text-[#334155]">
                   {percent(data.margin_percent)} · {money(data.margin_amount, data.currency)}
                 </span>
               </p>
-              <div className="h-2 overflow-hidden rounded-full bg-black/40">
+              <div className="h-2 overflow-hidden rounded-full bg-[#E2E8F0]">
                 <div
                   className={`h-full transition-all ${
                     Number(data.margin_percent) < 15
@@ -318,6 +411,7 @@ export default function QuotationBuilderPage({ params }: { params: Promise<{ id:
                     type="number"
                     className={inputClass}
                     defaultValue={Number(data.order_discount_percent)}
+                    onKeyDown={commitOnEnter}
                     onBlur={(e) =>
                       Number(e.target.value) !== Number(data.order_discount_percent) &&
                       run(() =>
@@ -335,10 +429,10 @@ export default function QuotationBuilderPage({ params }: { params: Promise<{ id:
           {/* ------------------------------------------- risk */}
           <Card title="Approval routing" subtitle="Computed, not requested">
             <div className="mb-3 flex items-center justify-between">
-              <span className="text-sm text-slate-400">Blended risk score</span>
+              <span className="text-sm text-[#64748B]">Blended risk score</span>
               <Badge tone={RISK_TONE[data.risk_band]}>{data.risk.score}</Badge>
             </div>
-            <p className="text-sm text-slate-300">{data.risk.explanation}</p>
+            <p className="text-sm text-[#475569]">{data.risk.explanation}</p>
             <dl className="mt-3 space-y-1 text-xs text-slate-500">
               <div className="flex justify-between">
                 <dt>Worst line excess</dt>
@@ -355,10 +449,20 @@ export default function QuotationBuilderPage({ params }: { params: Promise<{ id:
             </dl>
 
             {editable && (
-              <div className="mt-4 flex flex-wrap gap-2">
-                <Button onClick={submitForApproval} disabled={busy || data.lines.length === 0}>
-                  {data.requires_approval ? "Submit for Approval" : "Submit (auto-approves)"}
-                </Button>
+              <div className="mt-4">
+                <div className="flex flex-wrap gap-2">
+                  <Button onClick={submitForApproval} disabled={busy || data.lines.length === 0}>
+                    {data.requires_approval ? "Submit for Approval" : "Submit (auto-approves)"}
+                  </Button>
+                  <Button variant="secondary" onClick={saveDraft} disabled={busy}>
+                    Save as Draft
+                  </Button>
+                </div>
+                {savedAt && (
+                  <p className="mt-2 text-xs text-emerald-600">
+                    Draft saved at {savedAt} — logged on the audit trail below.
+                  </p>
+                )}
               </div>
             )}
 
@@ -389,23 +493,16 @@ export default function QuotationBuilderPage({ params }: { params: Promise<{ id:
                 >
                   Send to Customer
                 </Button>
-                <Button
-                  variant="success"
-                  disabled={busy}
-                  onClick={async () => {
-                    setBusy(true);
-                    try {
-                      await post(`/quotations/${id}/confirm`);
-                      router.push("/fulfillment");
-                    } catch (err) {
-                      setActionError(err instanceof ApiError ? err.message : "Failed");
-                    } finally {
-                      setBusy(false);
-                    }
-                  }}
-                >
-                  Confirm Order
-                </Button>
+              </div>
+            )}
+
+            {data.status === "SENT" && (
+              <div className="mt-4">
+                <Note>
+                  Sent to the customer. Only the customer can confirm it, from their own portal —
+                  confirming here would skip their sign-off and start fulfilment on terms they had
+                  not yet accepted.
+                </Note>
               </div>
             )}
           </Card>
@@ -425,14 +522,14 @@ export default function QuotationBuilderPage({ params }: { params: Promise<{ id:
                 {upsells.map((suggestion) => (
                   <li
                     key={suggestion.product_id}
-                    className="rounded-lg border border-edge bg-black/20 p-3"
+                    className="rounded-lg border border-edge bg-[#F8FAFC] p-3"
                   >
                     <div className="flex items-start justify-between gap-3">
                       <div>
-                        <p className="text-sm font-medium text-slate-100">
+                        <p className="text-sm font-medium text-[#0F172A]">
                           {suggestion.product_name}
                         </p>
-                        <p className="mt-0.5 text-xs text-emerald-400">
+                        <p className="mt-0.5 text-xs text-emerald-600">
                           Margin +{money(suggestion.margin_delta)}
                         </p>
                       </div>

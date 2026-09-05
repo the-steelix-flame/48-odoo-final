@@ -427,13 +427,15 @@ def accept_request(request: NegotiationRequest, *, actor) -> Quotation:
         raise ValidationError("This request has already been resolved")
 
     if request.requested_discount_percent is not None:
-        for line in quotation.lines.all():
-            quotation_services.update_line(
-                quotation,
-                line.id,
-                discount_percent=request.requested_discount_percent,
-                actor=actor,
-            )
+        # The portal offers ONE "Counter Discount %" field, so the counter is an
+        # ORDER-level ask, not a per-line one. Setting it here (rather than
+        # stamping every line) matters twice over: it stops a 12% counter from
+        # silently cutting a line that was already at 18%, and it preserves the
+        # per-line discount structure the blended risk score is computed from.
+        # recalculate() apportions the order discount down to the lines before
+        # scoring, so ceilings are still enforced line by line.
+        quotation.order_discount_percent = request.requested_discount_percent
+        quotation.save(update_fields=["order_discount_percent", "updated_at"])
 
     request.status = NegotiationRequestStatus.ACCEPTED
     request.resolved_by = actor
@@ -491,4 +493,25 @@ def confirm_by_customer(quotation: Quotation, *, actor) -> dict:
         raise ValidationError(
             "This quotation cannot be confirmed yet — it is still being reviewed."
         )
+
+    # A customer must not be able to confirm out from under their own open
+    # change request. Without this the request is orphaned at SUBMITTED forever:
+    # the rep never accepts or rejects it, nobody is told, and the customer has
+    # silently accepted terms they were in the middle of disputing.
+    #
+    # Deliberately SUBMITTED only, not every open round. A COUNTERED request has
+    # already been answered — the customer has seen our offer, so confirming is
+    # an informed "I'll take the original terms", not a silent acceptance of
+    # something they were disputing. Blocking that would trap them, because
+    # there is no "decline our counter" action for them to reach for.
+    open_request = NegotiationRequest.objects.filter(
+        quotation=quotation, status=NegotiationRequestStatus.SUBMITTED
+    ).first()
+    if open_request is not None:
+        raise ValidationError(
+            "You have a change request awaiting a response. Your sales rep must accept or "
+            "decline it before this quotation can be confirmed.",
+            negotiation_request_id=open_request.id,
+        )
+
     return quotation_services.confirm(quotation, actor=actor)
