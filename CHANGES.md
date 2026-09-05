@@ -262,3 +262,375 @@ construction, because it is one signed formula rather than two code paths.
   and button have not been clicked in a real browser.
 - Everything above went through the service layer. **The HTTP path for confirm is still broken
   (§2.1)** and remains the one blocker for a genuine click-through demo.
+
+---
+---
+
+# CHANGES — the-steelix-flame lane (Deal engine & admin back-end)
+
+Branch: `main` (uncommitted working tree) · Apps: `quotations` `approvals` `negotiation` + admin back-end · Screens: 3, 4, 5, 6, 11, 18, admin
+
+Everything below was verified by running it, not by reading it. Verification commands are given so
+anyone can reproduce the result.
+
+---
+
+## 1. Changes shipped
+
+### Admin back-end: business management + the "Back-end" button
+
+**Why the button changed.** `TopNav` showed a **Back-end** link to *every* internal role, deep-linked
+to `/settings/discounts`. But that page's save endpoints
+(`apps/governance/api.py::update_tier_ceiling` and friends) call
+`require_role(request, Role.ADMIN, Role.SALES_MANAGER)`. So a Sales Rep or Finance user could open
+the page, edit the ceiling inputs, press **Save configuration** — and only then discover a 403.
+A visible dead end for two of the four internal roles.
+
+It also made the rest of the configuration surface undiscoverable: the button went to *one* config
+page rather than to a back-end.
+
+| File | Change |
+|---|---|
+| `frontend/src/components/shell/TopNav.tsx` | Button gated to `ADMIN` / `SALES_MANAGER`, repointed at `/admin`. |
+| `frontend/src/app/(app)/admin/layout.tsx` | **New.** Second role gate over the whole admin section, mirroring the server's `require_role`. Renders an explanatory panel rather than a redirect, so a Rep who follows a link understands why. |
+| `frontend/src/app/(app)/admin/page.tsx` | **New.** Hub with three tiles — Business Management (Admin), Discounts & Approval Chains, Product Catalog. Tiles filter by role. |
+
+**Business management.** Admin registers a company you sell to; the system mints a portal login and
+displays the password **once**.
+
+| File | Change |
+|---|---|
+| `backend/apps/accounts/businesses.py` | **New.** `create_business`, `issue_portal_login`, `reset_portal_password`, `set_portal_access`, `generate_password`. |
+| `backend/apps/accounts/admin_api.py` | **New.** `/api/admin/businesses` CRUD + `/portal-login`, `/reset-password`, `/access`. Every route `require_role(ADMIN)`. |
+| `backend/apps/accounts/tests.py` | **New.** 17 tests. |
+| `backend/config/api.py` | One line: `api.add_router("/admin/", admin_router)`. |
+| `frontend/src/types/index.ts` | **Additive only** — added `Business` and `BusinessCredentials`. Nothing existing was touched. |
+| `frontend/src/app/(app)/admin/businesses/page.tsx` | **New.** List, create form, one-time credential panel with copy-to-clipboard, reset, suspend/restore. |
+
+**No migration.** This deliberately reuses what already exists rather than adding columns:
+
+- portal access is `User.is_active` — already there
+- issuance date is `User.date_joined`, last use is `User.last_login` — already there
+- the business↔login link is `Customer.portal_user` — already there, and until now only ever
+  populated by `seed_demo`. There was no UI to create a portal user at all.
+
+### The nav is now role-shaped
+
+Two rounds here, and the second replaced the first — recording both so nobody re-adds the thing we
+removed.
+
+**First attempt (wrong):** a **Back-end** button in the right-hand utility cluster, then an **Admin**
+nav item, both leading to an `/admin` hub page of tiles. The button read as a control rather than a
+destination and was invisible; the hub was a landing page in front of screens an admin lives in,
+which is a click that buys nothing.
+
+**What's there now:** the admin screens sit *inline in the nav*, and the nav is filtered per role.
+
+| Role | Nav |
+|---|---|
+| **Admin** (12) | **Analytics** · Quotations · Approvals · Fulfillment · Subscriptions · Invoices · Deal Health · Reports · Products ⟩ User Management · Business Management · Discount Tiers & Approval Chains |
+| **Sales Manager** (10) | Dashboard · …the same nine… ⟩ Discount Tiers & Approval Chains |
+| **Sales Rep** (9) | Dashboard · …the same nine… |
+| **Finance** (9) | Dashboard · …the same nine… |
+
+| File | Change |
+|---|---|
+| `components/shell/TopNav.tsx` | `NavItem` gained `labelByRole`. Admin config items added inline. Back-end button removed. A single divider is derived from the first role-restricted item, so it lands correctly for Admin *and* for a Sales Manager who only sees one config link. |
+| `app/(app)/dashboard/page.tsx` | Heading reads "Platform Analytics" for Admin. The nav says *Analytics*; landing on "Welcome back, A." reads as the wrong page. |
+| `app/(app)/admin/page.tsx` | Hub replaced by a redirect to `/admin/users`, so old links don't 404. |
+| `app/(app)/admin/layout.tsx` | Tightened to `ADMIN` only, matching `require_role(ADMIN)` on every route in `admin_api.py`. |
+| `app/(app)/settings/layout.tsx` | **New.** See below. |
+| `components/shell/RoleGuard.tsx` | **New.** Shared gate behind both layouts. |
+
+**"Product Catalog" was requested as a fourth admin link and deliberately not added** — *Products*
+already sits in the nav for every role and points at the same `/products`. Two entries to one screen
+is noise. Say the word if you want it duplicated anyway.
+
+### Closed: `/settings/discounts` was ungated
+
+Separate from the button. The page was reachable by **any** internal role, but its save endpoints
+require Admin or Sales Manager. A Sales Rep or Finance user could open it, edit the ceilings, press
+**Save configuration**, and only then get a 403 — the original dead end, still open after the first
+round because the discount screen lives under `/settings`, not `/admin`.
+
+`app/(app)/settings/layout.tsx` now gates the subtree to `ADMIN` / `SALES_MANAGER`, matching the
+server. The refusal explains itself rather than silently redirecting, so someone following a
+colleague's link understands why.
+
+### User management + per-user analytics
+
+| File | Change |
+|---|---|
+| `backend/apps/accounts/staff.py` | **New.** `create_account`, `reset_password`, `set_access`, `change_role`. |
+| `backend/apps/accounts/analytics.py` | **New.** `user_analytics(user)` — role-appropriate metrics aggregated from the operational tables. |
+| `backend/apps/accounts/admin_api.py` | Added `/admin/users` (list, create, detail, reset-password, access, role) and `/admin/teams`. All `require_role(ADMIN)`. |
+| `frontend/src/app/(app)/admin/users/page.tsx` | **New.** Table with role filter chips, create form, one-time credential panel, reset / enable / disable. |
+| `frontend/src/app/(app)/admin/users/[id]/page.tsx` | **New.** Analytics, recent quotations, recent approval decisions, role change and account controls. |
+| `frontend/src/app/(app)/admin/page.tsx` | Added the User Management tile. |
+| `frontend/src/types/index.ts` | Additive: `AdminUser`, `UserCredentials`, `AnalyticsMetric`, `AnalyticsSection`, `UserQuotationRef`, `UserDecisionRef`, `AdminUserDetail`, `SalesTeam`. |
+
+**Analytics are role-shaped, not one-size-fits-all.** "How is this person doing" means different
+things per role, so the backend decides which sections to send and the page renders what arrives:
+
+| Role | Sections |
+|---|---|
+| Sales Rep | Selling |
+| Sales Manager, Admin | Selling + Approvals |
+| Finance | Approvals |
+| Customer | Portal activity |
+
+Selling covers quotations created, confirmed count and value, win rate, open pipeline, average
+effective discount, average risk score, awaiting approval, open alerts and upsells accepted.
+Approvals covers decisions made, the approved/returned/rejected split, average decision time from
+request raised to acted, and how many steps currently wait on that role.
+
+**Win rate counts decided deals only.** Treating still-open quotations as losses would punish a rep
+for having a healthy pipeline. With no decided deals it shows `—` rather than a misleading `0%`.
+
+### Guards that exist for a reason
+
+| Guard | Why |
+|---|---|
+| `CUSTOMER` cannot be created in User Management | A `CUSTOMER` user with no `Customer` row can log in and then hit a wall on every portal route, because portal auth resolves through `customer_profile`. The error names Business Management instead. |
+| Cannot deactivate your own account | Trivially locks you out mid-session. |
+| Cannot deactivate or demote the last active admin | Locks *every* human out of the back-end, unrecoverably through the UI. |
+| Deactivate never deletes | Quotations, approval decisions and audit events all FK to the user. `on_delete=SET_NULL` on the audit trail would quietly turn a named decision into an anonymous one. |
+| Reset re-enables the account | Reset is how a locked-out person gets back in; leaving them disabled makes it a trap. |
+
+### Bug found and fixed during this work
+
+`GET /api/admin/users/{id}` returned **500** on every call. `MetricOut.value` is typed `str`, and
+pydantic v2 does **not** coerce `int` to `str` — it raises. Counts are naturally ints, so every
+metric built from a `.count()` blew up response validation.
+
+Fixed centrally in `analytics.py::user_analytics` — one normalisation pass over all sections before
+returning, rather than relying on twenty call sites to remember. Covered by
+`test_every_metric_value_is_a_string`, which walks every role and asserts the contract, so adding a
+new metric later can't reintroduce it.
+
+Worth flagging to the team: this is the **same class of bug** anubhaw0raj hit twice
+(`0cb8c26`, `9a5904d`) — Ninja response schemas failing on a type the code assumed would be
+coerced. It fails as an opaque 500 with an empty body; the traceback is only in the server log.
+**If an endpoint returns nothing and the page renders blank, check `runserver` output first.**
+
+### The customer portal had no index — two bugs on the negotiation loop
+
+**Bug 1 — a customer could log in and reach nothing.** Portal access is granted *per quotation* by
+`PortalToken`, and nothing enumerated the tokens a customer held. `/portal` was a static "open the
+link your account manager sent you" message, and there was no `GET /api/portal/quotations` at all.
+So a business onboarded through Business Management would log in, see a paragraph of instructions,
+and have no way to reach a quotation that had genuinely been sent to them.
+
+| File | Change |
+|---|---|
+| `apps/negotiation/services.py` | New `portal_quotations_for(user)` — token-scoped, deduped when a quotation was re-sent, newest first. New `portal_status()` mapping internal statuses to customer-facing wording. |
+| `apps/negotiation/api.py` | New `GET /api/portal/quotations`. `status_label` + `action_required` added to the detail payload too. |
+| `app/portal/page.tsx` | Rewritten as the real list: reference, sent date, item count, total, status, and a banner when something needs the customer's attention. |
+| `app/portal/quotations/[id]/page.tsx` | Shows the friendly status; added an "All quotations" link back. |
+| `types/index.ts` | Additive: `PortalQuotationRow`; `status_label` / `action_required` on `PortalQuotation`. |
+
+**Bug 2 — the negotiation loop dead-ended at the final click.** The brief's flow is: customer
+counters → rep accepts → quote re-enters approval → approvers clear it → customer confirms. That
+last step lands the quotation on `APPROVED`, but `confirm_by_customer` only accepted `SENT` and
+`UNDER_NEGOTIATION`. Meanwhile `portal_status` was already telling the customer **"Ready for your
+confirmation"**. The UI invited a click that the service refused.
+
+`confirm_by_customer` now accepts `APPROVED` as well. Safe by construction: reaching the endpoint at
+all requires a `PortalToken`, and tokens only exist because a rep sent the quotation.
+
+Found by running the flow, not by reading it — the listing bug hid the confirm bug, because nobody
+could get far enough to hit it.
+
+### Two-way negotiation with a shared history
+
+Negotiation was one-shot: the customer sent a counter, the rep could only accept or reject, and
+neither side could see the conversation. Now it's a real back-and-forth over one shared record.
+
+| File | Change |
+|---|---|
+| `apps/negotiation/models.py` | `NegotiationRequest.counter_discount_percent` — what we offered back. Kept on the **same row** so one round of haggling reads as one row: asked 25, offered 12, accepted. |
+| `apps/negotiation/migrations/0003_*`, `0004_*` | **Everyone must re-run `manage.py migrate`.** |
+| `apps/negotiation/services.py` | `negotiation_timeline()` merges messages and request state-changes into one ordered thread. Plus `post_message()` (either side), `counter_request()`, `accept_counter()`, `open_request_for()`. |
+| `apps/negotiation/api.py` | Internal: `GET/POST .../negotiation`, `.../messages`, `.../requests/{id}/counter`. Portal: `POST .../messages`, `POST .../requests/{id}/accept`. `timeline` + `open_request` added to the portal payload. |
+| `components/negotiation/Thread.tsx` | **New.** Rendered by **both** sides from the same payload; `viewpoint` changes only labelling, never which entries appear. |
+| `components/negotiation/RepNegotiationPanel.tsx` | **New.** On the quotation: read the exchange, then accept / counter / decline, or just reply. |
+| `app/portal/quotations/[id]/page.tsx` | Same thread, plus an "Accept 12%" panel when we've made an offer. |
+
+**A counter is an offer, not a decision.** `counter_request` changes nothing on the quotation — the
+discount only lands when the customer accepts. Quoting a customer a total that reflects a discount
+they haven't agreed to would be lying, and the rep would be staring at a number nobody promised.
+`test_rep_counter_does_not_change_the_quotation_yet` pins this.
+
+**Re-approval doesn't care who agreed.** The rep-accepts path and the customer-accepts-our-counter
+path both end in the same extracted `_reapprove_if_needed()`, so they cannot drift. Accepting a
+30% counter still re-enters approval automatically.
+
+### Four more bugs, all found by running the negotiation rather than reading it
+
+1. **`counter_discount_percent` defaulted to `0.00`, not null.** `**PERCENT` carries `default=0`, so
+   "no counter yet" was indistinguishable from "we offered zero percent" — the portal announced
+   *"We've made you an offer"* the instant a customer sent a request. Fixed with
+   `percent(default=None)`; the label is now keyed on `status == COUNTERED`.
+2. **Messages appeared twice.** `submit_request` wrote the customer's text as both a
+   `NegotiationMessage` *and* the request's `message`; `counter_request` did the same with the rep's
+   note. The request row carries the text and the timeline renders it — the duplicates are gone.
+3. **Accepting a counter rewrote history.** `accept_counter` overwrote `requested_discount_percent`
+   with the agreed figure, so a customer who asked 25% and settled at 12% appeared to have asked for
+   12% all along. The original ask is now left intact.
+4. **`POST .../counter` returned 500** — no `response=` schema, so Ninja tried to serialise model
+   instances. Same failure mode as the analytics bug and as `0cb8c26`: empty body, blank page,
+   traceback only in the server log.
+
+### Status wording is decided server-side
+
+Internal names leak process a customer shouldn't have to interpret — "Pending Approval" invites
+"approval by whom, for what?". `portal_status()` maps each status to plain language plus an
+`action_required` flag, so the portal can highlight only what's genuinely waiting on the customer:
+
+| Internal | Customer sees | Their move? |
+|---|---|---|
+| `SENT` | Awaiting your review | **yes** |
+| `APPROVED` | Ready for your confirmation | **yes** |
+| `UNDER_NEGOTIATION` | Your request is with our team | no |
+| `PENDING_APPROVAL` | Under internal review | no |
+| `CONFIRMED` | Confirmed | no |
+| `REJECTED` / `CANCELLED` | Closed | no |
+
+The list stays thin on purpose — reference, date, item count, total, status. No margin, no risk
+score, no approval history; those never enter the portal serialiser.
+
+### Decisions worth knowing
+
+**The password is never recoverable.** It goes straight into Django's hasher and is returned exactly
+once, by the call that generated it. There is no "show password" endpoint and no plaintext column.
+If it's lost, you reset it. `test_password_is_never_recoverable_after_creation` asserts that no
+column on either row contains the plaintext.
+
+**Suspend disables, never deletes.** `set_portal_access` toggles `is_active`. Deleting the user
+would orphan or cascade their negotiation messages and counter-offers. Revoking access must not
+rewrite the audit trail.
+
+**Reset also re-enables.** Resetting a suspended account is how you *recover* it, so a reset that
+left the account locked out would be a trap.
+
+**Generated passwords exclude `l I O 0 1`.** These get read aloud on a call and retyped off a
+screenshot.
+
+**Email collisions are rejected, loudly.** Onboarding a business whose contact email already
+belongs to an account fails with a clear message rather than silently attaching a portal role to
+an existing staff login.
+
+---
+
+## 2. What this is NOT (scope decision)
+
+"Add a binded business" was ambiguous between two very different features, and we picked
+deliberately:
+
+- **Built:** *customer onboarding.* A business is a company you sell **to**. Its login opens the
+  **portal**, where it views, comments on, counter-offers and confirms **its own quotations**.
+- **Not built:** *multi-tenancy.* A business does **not** get its own products, warehouses, ceilings
+  or staff, and cannot create quotations or approve anything. That would need a company FK on
+  nearly every table plus queryset scoping on every read — roughly a day, touching all three lanes.
+  The brief calls multi-company a bonus, not a requirement.
+
+If we later want multi-tenancy, the migration path is a `Company` table plus a nullable FK, not a
+rewrite of this.
+
+---
+
+## 3. Verification
+
+```bash
+cd backend && python manage.py test apps      # 70 passed (31 accounts, 11 negotiation)
+cd frontend && npm run build                  # all routes emitted
+```
+
+Full portal loop, live against `runserver`, with a business created through the admin UI:
+
+| Step | Result |
+|---|---|
+| Admin onboards "Portal Test Co" (Gold) | credentials issued |
+| Customer's portal list *before* anything is sent | **0 rows** — an unsent quotation stays private |
+| Rep builds Q-1009, submits | auto-routed, `MEDIUM` (47.58) |
+| Manager approves, rep sends | portal token minted |
+| Customer's portal list *after* sending | **1 row** — "Awaiting your review", action required |
+| Customer counters at 20% | "Your request is with our team" |
+| Rep accepts → re-scored `HIGH` | re-entered approval automatically |
+| Manager then Finance approve | "Ready for your confirmation" |
+| Customer confirms | `CONFIRMED` |
+| Sales side continues | fulfillment plan created, `INV-1043` raised |
+| Customer hits `/api/quotations/` | `401` |
+| Customer opens another company's quotation | `Not found` |
+
+Live, against `runserver` with seeded data:
+
+| Check | Result |
+|---|---|
+| Admin creates "Northwind Traders" (GOLD) | Business + credentials returned, `portal_access_enabled: true` |
+| Business logs in with the generated password | `200`, role `CUSTOMER` |
+| Admin suspends access, business retries login | `403` |
+| Sales Rep calls `GET /api/admin/businesses` | `403` |
+| Admin creates a `SALES_REP` account | Created, password returned once |
+| Admin tries to create a `CUSTOMER` account | Refused, pointing at Business Management |
+| Analytics for J. Rao (rep) | 4 quotations, 100% win rate, 16.4% avg discount, 58.9 avg risk, 2 upsells |
+| Section titles per role | Rep → Selling · Manager/Admin → Selling + Approvals · Finance → Approvals · Customer → Portal activity |
+
+Test records were removed afterwards; the dev database is back to 6 customers and 7 users.
+
+---
+
+## 4. Notes for the others
+
+**@sinjeki** — I added two **new files** inside your `accounts` app (`businesses.py`,
+`admin_api.py`) rather than editing `models.py` or `api.py`, so this shouldn't conflict with your
+work. Two things do touch your files:
+
+- `types/index.ts` — additive only, one new block, nothing existing changed.
+- `config/api.py` — one `add_router` line under the `the-steelix-flame` section.
+
+If you'd rather this lived in its own `apps/administration` app, say so and I'll move it; it's
+self-contained.
+
+**@anubhaw0raj** — nothing in your lane was touched.
+
+---
+
+## 5. Open items
+
+- [ ] **Onboarding and user provisioning write no audit event.** Quotations have
+      `quotation_event`; business creation, account creation, password resets, role changes and
+      suspensions have no equivalent trail. For features that hand out credentials and change
+      permissions, that's the most important gap here. The `actor` parameter is already threaded
+      through every service function in `businesses.py` and `staff.py` for exactly this.
+- [ ] **Analytics recompute on every page load.** Fine at seed scale; the rep metrics do a handful
+      of aggregates plus one Python-side loop over discount ratios. `insights.RepDiscountStat`
+      already exists as the caching pattern to follow if it gets slow.
+- [ ] **No pagination on the user list**, same as businesses.
+- [ ] **No email delivery.** `create_business` returns the password to the caller. When real email
+      lands, that function is where it should be sent instead.
+- [ ] **Business edit UI is API-only.** `PATCH /api/admin/businesses/{id}` works; the table has no
+      inline edit yet.
+- [ ] **No pagination** on the business list. Fine at demo scale.
+- [ ] **The timeline shows one entry per round, not per move.** Once a customer accepts our
+      counter, the `REP_COUNTER` entry becomes `ACCEPTED` — the "we offered 12%" moment is folded
+      into the outcome rather than kept as its own line. Every figure survives (asked 25, agreed 12)
+      and all messages are preserved, so nothing is lost that matters; it's just less granular than
+      a true event log. Splitting it would mean an append-only `negotiation_event` table.
+- [ ] **No notification when the other side replies.** Both parties have to open the quotation to
+      see a new message. The events are already written to `quotation_event`; there's just no
+      transport.
+
+---
+
+## 6. Migrations added by this lane
+
+Anyone pulling this must run `python manage.py migrate`:
+
+| Migration | Why |
+|---|---|
+| `negotiation/0003_negotiationrequest_counter_discount_percent` | The rep's counter-offer. |
+| `negotiation/0004_alter_negotiationrequest_counter_discount_percent` | Makes it nullable — see bug 1 above. |
+
+Business and user management deliberately needed **no** migration; they reuse `User.is_active`,
+`User.date_joined` and `Customer.portal_user`.

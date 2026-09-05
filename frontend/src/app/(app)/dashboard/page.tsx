@@ -11,7 +11,7 @@ import { useAuth } from "@/lib/auth";
 import type { DashboardData } from "@/types";
 
 export default function DashboardPage() {
-  const { user } = useAuth();
+  const { user, role } = useAuth();
   const { data, error, loading, reload } = useApi<DashboardData>("/insights/dashboard");
 
   if (loading) return <Loading />;
@@ -21,8 +21,19 @@ export default function DashboardPage() {
   return (
     <>
       <PageHeader
-        title={`Welcome back, ${user?.full_name?.split(" ")[0] ?? "there"}`}
-        subtitle="Central hub — every module links out from here."
+        // the-steelix-flame: an admin reaches this from a nav item labelled
+        // "Analytics", so landing on a personal greeting reads as the wrong
+        // page. Same screen, named for what it is to whoever opened it.
+        title={
+          role === "ADMIN"
+            ? "Platform Analytics"
+            : `Welcome back, ${user?.full_name?.split(" ")[0] ?? "there"}`
+        }
+        subtitle={
+          role === "ADMIN"
+            ? "Platform-wide activity across every team."
+            : "Central hub — every module links out from here."
+        }
         actions={
           <>
             <Link

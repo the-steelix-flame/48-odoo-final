@@ -3,7 +3,7 @@ import uuid
 from django.db import models
 
 from apps.common.enums import NegotiationRequestStatus
-from apps.common.models import PERCENT, TimeStampedModel
+from apps.common.models import PERCENT, TimeStampedModel, percent
 
 
 class PortalToken(TimeStampedModel):
@@ -94,6 +94,14 @@ class NegotiationRequest(TimeStampedModel):
         max_length=12,
         choices=NegotiationRequestStatus.choices,
         default=NegotiationRequestStatus.SUBMITTED,
+    )
+    #: What the rep proposed back when they countered instead of accepting.
+    #: Kept on the same row rather than opening a new request, so one round of
+    #: haggling reads as one row: asked 20, offered 15, customer accepted.
+    #: NOT `**PERCENT` — that carries `default=0`, which would make "no counter
+    #: yet" indistinguishable from "we offered zero percent".
+    counter_discount_percent = models.DecimalField(
+        **percent(default=None), null=True, blank=True
     )
     resolved_by = models.ForeignKey(
         "accounts.User", null=True, blank=True, on_delete=models.SET_NULL, related_name="+"
