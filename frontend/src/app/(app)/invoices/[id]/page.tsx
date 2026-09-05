@@ -96,7 +96,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                   }`}
                 />
                 <span
-                  className={`text-sm ${stage.done ? "text-slate-100" : "text-slate-500"}`}
+                  className={`text-sm ${stage.done ? "text-[#0F172A]" : "text-slate-500"}`}
                 >
                   {stage.label}
                 </span>
@@ -128,7 +128,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
             <Table columns={["Description", "Qty", "Unit Price", "Discount", "Tax", "Total"]}>
               {data.lines.map((line) => (
                 <Row key={line.id}>
-                  <Cell className="font-medium text-slate-100">{line.description}</Cell>
+                  <Cell className="font-medium text-[#0F172A]">{line.description}</Cell>
                   <Cell>{Number(line.quantity)}</Cell>
                   <Cell>{money(line.unit_price, data.currency)}</Cell>
                   <Cell>{percent(line.discount_percent, 0)}</Cell>
@@ -145,13 +145,13 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                 ["Paid", `− ${money(data.amount_paid, data.currency)}`],
               ].map(([label, value]) => (
                 <div key={label} className="flex justify-between">
-                  <dt className="text-slate-400">{label}</dt>
-                  <dd className="text-slate-200">{value}</dd>
+                  <dt className="text-[#64748B]">{label}</dt>
+                  <dd className="text-[#334155]">{value}</dd>
                 </div>
               ))}
               <div className="flex justify-between border-t border-edge pt-2 text-base font-semibold">
-                <dt className="text-slate-300">Amount due</dt>
-                <dd className="text-slate-100">{money(data.amount_due, data.currency)}</dd>
+                <dt className="text-[#475569]">Amount due</dt>
+                <dd className="text-[#0F172A]">{money(data.amount_due, data.currency)}</dd>
               </div>
             </dl>
           </Card>
@@ -163,13 +163,13 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
               <Table columns={["Amount", "Method", "Reference", "When", "Recorded by"]}>
                 {data.payments.map((payment) => (
                   <Row key={payment.id}>
-                    <Cell className="font-medium text-slate-100">
+                    <Cell className="font-medium text-[#0F172A]">
                       {money(payment.amount, data.currency)}
                     </Cell>
                     <Cell>{titleCase(payment.method)}</Cell>
-                    <Cell className="text-slate-400">{payment.reference || "—"}</Cell>
-                    <Cell className="text-slate-400">{dateTime(payment.paid_at)}</Cell>
-                    <Cell className="text-slate-400">{payment.recorded_by_name ?? "—"}</Cell>
+                    <Cell className="text-[#64748B]">{payment.reference || "—"}</Cell>
+                    <Cell className="text-[#64748B]">{dateTime(payment.paid_at)}</Cell>
+                    <Cell className="text-[#64748B]">{payment.recorded_by_name ?? "—"}</Cell>
                   </Row>
                 ))}
               </Table>
@@ -180,7 +180,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
         <div className="space-y-6">
           <Card title="Record Payment">
             {!outstanding ? (
-              <p className="text-sm text-emerald-300">
+              <p className="text-sm text-emerald-700">
                 This invoice is fully paid. Nothing outstanding.
               </p>
             ) : (

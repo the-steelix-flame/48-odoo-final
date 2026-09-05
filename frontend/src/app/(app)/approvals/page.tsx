@@ -50,7 +50,7 @@ export default function ApprovalsPage() {
         <Badge tone="green">{counts?.approved ?? 0} Approved</Badge>
         <button
           onClick={() => setPendingOnly((value) => !value)}
-          className="rounded-lg border border-edge px-3 py-0.5 text-xs text-slate-300 hover:bg-white/5"
+          className="rounded-lg border border-edge px-3 py-0.5 text-xs text-[#475569] hover:bg-white/5"
         >
           {pendingOnly ? "Show all" : "Filter: Pending only"}
         </button>
@@ -87,7 +87,7 @@ export default function ApprovalsPage() {
                           <span
                             className={
                               index + 1 === row.current_step_number
-                                ? "font-semibold text-amber-300"
+                                ? "font-semibold text-amber-700"
                                 : "text-slate-500"
                             }
                           >

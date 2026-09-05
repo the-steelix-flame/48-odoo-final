@@ -139,7 +139,14 @@ export function Table({
 }) {
   return (
     <div className="overflow-x-auto">
-      <table className="w-full min-w-[640px] text-left text-[13px]">
+      {/* 640px was fixed regardless of column count. The 9-column quotation
+          builder got ~39px of content per column, which collapsed the Qty and
+          Discount inputs and wrapped product names onto two lines. Scale with
+          the columns instead and let the wrapper scroll. */}
+      <table
+        className="w-full text-left text-[13px]"
+        style={{ minWidth: Math.max(640, columns.length * 112) }}
+      >
         <thead className="border-b border-[#E2E8F0] bg-[#F8FAFC]">
           <tr>
             {columns.map((column) => (
