@@ -1245,6 +1245,83 @@ all already existed — they had simply never been wired to anything.
 
 ---
 
+### The negotiated discount never reached the bill
+
+Found in the dev database, not in a test: **Q-1013** was agreed at 10% off. The
+quotation total said **$186.30**. The invoice said **$207.00**. The customer was
+charged the full list price and overpaid by exactly the discount both sides had
+shaken hands on.
+
+`issue_one_time_invoice` billed each line's `line_total`, which is net of that
+line's OWN discount and nothing else. A negotiated figure never lands on the
+lines — `accept_request` and `accept_counter` both write
+`order_discount_percent`, deliberately, so that agreeing 12% overall doesn't
+overwrite a line already sitting at 18%. So the one number the whole negotiation
+produces was the one number billing ignored.
+
+New `quotations.order_discount_factor(quotation)` is the single definition of
+"what is actually charged for this line". `recalculate` apportions the order
+discount by each line's share of the post-line-discount net, which reduces
+exactly to one multiplier:
+
+    order_discount_value × (line_total / net_after_lines)
+      = net_after_lines × order% / 100 × line_total / net_after_lines
+      = line_total × order% / 100
+
+so tax computed from it agrees with the tax on the quotation, by construction
+rather than by coincidence.
+
+| File | Change |
+|---|---|
+| `apps/quotations/services.py` | New `order_discount_factor()`. |
+| `apps/billing/services.py` | `issue_one_time_invoice` applies it, and states the **effective** discount per line. |
+| `apps/subscriptions/services.py` | `activate_from_quotation` applies it to the subscription's unit price. |
+
+**The subscription had the same hole.** It priced off `line_total / quantity`,
+so a negotiated discount was dropped from every recurring period, forever — a
+worse version of the same bug, because it recurs. It now inherits the agreed
+rate.
+
+**The invoice line states the effective discount**, not the line-level one.
+Showing 5% next to a total that had 12% taken off would put a line on a
+customer-facing document whose own numbers don't multiply out. The percentage is stored
+to two places, so re-multiplying it can't reproduce the cent exactly: the line
+total is the authority on what is owed and the percentage describes it. The test
+asserts the money exactly and the percentage to within a cent.
+
+Verified: Q-1013 now bills **$186.30**, matching its quotation exactly; Q-1012
+(no negotiation) is unchanged at $207.00; Q-1002 stays at $14,241.60 against a
+$14,526.60 quotation, which is correct — the $285 difference is a RECURRING line
+billing on its own subscription schedule, which is hybrid billing working, not a
+discrepancy. 3 new tests, 156 backend tests pass.
+
+⚠️ **The existing Q-1013 invoice in the dev database is still wrong** — it was
+raised before this fix and is already marked paid at $207.00. Left alone
+deliberately: correcting a settled invoice is a credit note, not an edit, and
+that is a call for whoever owns the demo data.
+
+---
+
+### Back on a screen the nav already lands on
+
+Reported on the portal quotation list: a Back control on the customer's home
+screen, offering to return them to a quotation they had deliberately navigated
+out of.
+
+`canGoBack` only asked "was there a previous screen inside this shell", which is
+true the moment you go anywhere and come back. But Back is meaningless on a nav
+destination — the nav gets you there in one click, and going "back" from a home
+screen leaves the place you just chose to be.
+
+`NAV_ROOTS` in `lib/navigation.tsx` lists every screen the sidebar or portal nav
+lands on, and `canGoBack` is false on those. Kept in one place rather than passed
+per page so it cannot drift: a new screen is either a nav destination and listed,
+or it is a detail view and gets Back. This also fixes `/portal/profile` and the
+fourteen internal nav screens, which all had it for the same reason — the report
+was about the portal, but the cause was not specific to it.
+
+---
+
 ## 7. Migrations added by this lane
 
 Anyone pulling this must run `python manage.py migrate`:

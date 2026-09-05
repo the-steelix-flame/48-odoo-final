@@ -74,3 +74,6 @@ class UpsellSuggestionOut(Schema):
     score: float
     is_promoted: bool
     promo_label: str | None = None
+    #: "Every 2 years" etc. Set only on recurring suggestions, so the panel can
+    #: say what a rep is committing the customer to before they click Add.
+    plan_label: str | None = None

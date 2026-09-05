@@ -448,6 +448,16 @@ def get_negotiation(request, quotation_id: int):
     except Quotation.DoesNotExist:
         raise NotFound("Quotation not found")
 
+    return _negotiation_payload(quotation)
+
+
+def _negotiation_payload(quotation: Quotation) -> dict:
+    """One shape for the rep's negotiation view.
+
+    Shared so that any endpoint which changes the conversation can hand back the
+    conversation, rather than the caller having to fetch it again afterwards.
+    """
+    quotation.refresh_from_db()
     return {
         "quotation_id": quotation.id,
         "quotation_number": quotation.number,
@@ -510,18 +520,23 @@ def list_requests(request, status: str | None = None):
     return list(qs)
 
 
-@router.post("/internal/requests/{request_id}/accept", auth=internal_auth)
+@router.post(
+    "/internal/requests/{request_id}/accept",
+    response=NegotiationOut,
+    auth=internal_auth,
+)
 def accept_request(request, request_id: int):
-    """Accept the counter-offer; risk is re-scored and approval may reopen."""
+    """Accept the counter-offer; risk is re-scored and approval may reopen.
+
+    Returns the whole conversation, like every other endpoint that changes it.
+    It used to return a small summary dict, so the panel accepted and then POSTed
+    to `/internal/quotations/{id}/negotiation` to refresh — a GET-only route,
+    which answered 405. The accept had already succeeded by then, so the deal
+    moved while the screen showed an error.
+    """
     negotiation_request = _get_request(request_id)
     quotation = services.accept_request(negotiation_request, actor=request.auth)
-    return {
-        "quotation_id": quotation.id,
-        "status": quotation.status,
-        "risk_band": quotation.risk_band,
-        "blended_risk_score": quotation.blended_risk_score,
-        "re_entered_approval": quotation.status == "PENDING_APPROVAL",
-    }
+    return _negotiation_payload(quotation)
 
 
 # There is deliberately NO rep-side reject endpoint.

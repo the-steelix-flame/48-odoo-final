@@ -14,6 +14,13 @@ from apps.quotations.models import Quotation
 
 router = Router(auth=internal_auth)
 
+#: Who may LOOK at fulfilment. Stock levels and warehouse allocation are
+#: operations data — the brief gives it to Finance/Operations, and a Sales Rep
+#: has no decision to make with it. Acting on a plan is narrower still
+#: (`Role.FINANCE` on every mutation below), because accepting a split commits
+#: stock that every other open deal is competing for.
+VIEW_ROLES = (Role.FINANCE, Role.SALES_MANAGER)
+
 
 class WarehouseOut(Schema):
     id: int
@@ -125,11 +132,13 @@ class RestockIn(Schema):
 
 @router.get("/warehouses", response=list[WarehouseOut])
 def list_warehouses(request):
+    require_role(request, *VIEW_ROLES)
     return list(Warehouse.objects.all())
 
 
 @router.get("/stock", response=list[StockRowOut])
 def list_stock(request, warehouse_id: int | None = None, product_id: int | None = None):
+    require_role(request, *VIEW_ROLES)
     qs = StockItem.objects.select_related("warehouse", "product")
     if warehouse_id:
         qs = qs.filter(warehouse_id=warehouse_id)
@@ -148,6 +157,7 @@ def orders_awaiting(request):
     a PARTIALLY_SHIPPED plan stays, because its backorder is exactly the work
     this screen exists to surface.
     """
+    require_role(request, *VIEW_ROLES)
     rows = []
     quotations = (
         Quotation.objects.filter(status=QuotationStatus.CONFIRMED)
@@ -181,6 +191,7 @@ def orders_awaiting(request):
 @router.post("/quotations/{quotation_id}/plan", response=PlanOut)
 def create_plan(request, quotation_id: int):
     """Compute the suggested split for a confirmed order."""
+    require_role(request, *VIEW_ROLES)
     try:
         quotation = Quotation.objects.select_related("customer").get(pk=quotation_id)
     except Quotation.DoesNotExist:
@@ -190,6 +201,7 @@ def create_plan(request, quotation_id: int):
 
 @router.get("/plans/{plan_id}", response=PlanOut)
 def get_plan(request, plan_id: int):
+    require_role(request, *VIEW_ROLES)
     return _get_plan(plan_id)
 
 

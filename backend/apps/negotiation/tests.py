@@ -14,11 +14,30 @@ from apps.accounts import businesses
 from apps.accounts.models import User
 from apps.billing import services as billing
 from apps.catalog.models import Product, ProductCategory
-from apps.common.enums import CustomerTier, InvoiceType, QuotationStatus, Role
+from apps.common.enums import (
+    CustomerTier,
+    InvoiceType,
+    NegotiationRequestStatus,
+    QuotationStatus,
+    Role,
+)
 from apps.common.errors import NotFound, PermissionDenied, ValidationError
 from apps.governance.models import CategoryDiscountCeiling, TierDiscountCeiling
 from apps.negotiation import services as negotiation
 from apps.quotations import services as quotations
+
+
+def _effective_discount(quotation) -> Decimal:
+    """What the customer actually gets off list, to two places.
+
+    Line discounts and the order discount compound, so neither field alone
+    answers "what did we agree?". This is the number the portal shows.
+    """
+    if not quotation.subtotal:
+        return Decimal("0.00")
+    return (
+        Decimal(quotation.discount_total) / Decimal(quotation.subtotal) * Decimal("100")
+    ).quantize(Decimal("0.01"))
 
 
 class PortalTestBase(TestCase):
@@ -286,9 +305,11 @@ class NegotiationThreadTests(PortalTestBase):
         negotiation.accept_counter(request, actor=self.buyer)
 
         quotation.refresh_from_db()
-        # Our 12%, not their 25% — and as an ORDER discount, exactly as when the
-        # rep accepts the customer's ask. The per-line figures are untouched.
-        self.assertEqual(quotation.order_discount_percent, Decimal("12.00"))
+        # Our 12%, not their 25%, and 12% is what they actually get. The order
+        # discount is DERIVED, not copied: written straight onto the field it
+        # would compound with the line discount and hand over ~19%. What the
+        # customer agreed to is the headline figure, so that is what is asserted.
+        self.assertEqual(_effective_discount(quotation), Decimal("12.00"))
         self.assertEqual(quotation.lines.first().discount_percent, before)
         request.refresh_from_db()
         self.assertEqual(request.status, "ACCEPTED")
@@ -320,7 +341,11 @@ class NegotiationThreadTests(PortalTestBase):
 
         quotation.refresh_from_db()
         self.assertEqual(quotation.lines.first().discount_percent, Decimal("18.00"))
-        self.assertEqual(quotation.order_discount_percent, Decimal("12.00"))
+        # The line is already deeper than the 12% agreed, so no order discount is
+        # added — and none is clawed back either. The customer keeps the better
+        # of the two; a negotiation never makes their price worse.
+        self.assertEqual(quotation.order_discount_percent, Decimal("0.00"))
+        self.assertEqual(_effective_discount(quotation), Decimal("18.00"))
 
     def test_accepting_our_counter_still_triggers_re_approval(self):
         """The re-approval tail must not depend on WHO agreed."""
@@ -418,20 +443,48 @@ class NegotiationRoundTests(PortalTestBase):
                 quotation, actor=self.buyer, requested_discount_percent=Decimal("20")
             )
 
-    def test_a_second_request_cannot_be_stacked_on_our_open_counter(self):
-        """A COUNTERED round is still open — it is the customer's move, and
-        their move is accept, not 'ask again and orphan the offer'."""
+    def test_a_second_request_cannot_be_stacked_on_an_unanswered_one(self):
+        """SUBMITTED means the ball is with us. Stacking a second request on it
+        orphans the first at SUBMITTED forever, which is what this guard is
+        for. Still refused."""
         quotation = self._sent()
-        request = negotiation.submit_request(
+        negotiation.submit_request(
             quotation, actor=self.buyer, requested_discount_percent=Decimal("25")
-        )
-        negotiation.counter_request(
-            request, actor=self.rep, counter_discount_percent=Decimal("12")
         )
         with self.assertRaises(ValidationError):
             negotiation.submit_request(
                 quotation, actor=self.buyer, requested_discount_percent=Decimal("20")
             )
+
+    def test_the_customer_can_counter_back_and_our_offer_is_not_orphaned(self):
+        """COUNTERED means the ball is with THEM, so a new request is their
+        answer to our answer — a negotiation goes back and forth.
+
+        This replaces a test that refused it outright. The concern behind that
+        was orphaning the offer, and it was the right concern: the fix is to
+        close our round rather than to forbid the reply. Both halves are
+        asserted here, because allowing the reply without settling the old
+        round would reintroduce exactly the bug it was guarding against.
+        """
+        quotation = self._sent()
+        first = negotiation.submit_request(
+            quotation, actor=self.buyer, requested_discount_percent=Decimal("25")
+        )
+        negotiation.counter_request(
+            first, actor=self.rep, counter_discount_percent=Decimal("12")
+        )
+
+        second = negotiation.submit_request(
+            quotation, actor=self.buyer, requested_discount_percent=Decimal("20")
+        )
+
+        first.refresh_from_db()
+        self.assertEqual(first.status, NegotiationRequestStatus.REJECTED)
+        self.assertIsNotNone(first.resolved_at)
+        self.assertIn("12", first.resolution_note)
+        # Exactly one round is open, and it is the new one.
+        self.assertEqual(negotiation.open_request_for(quotation).id, second.id)
+        self.assertEqual(second.requested_discount_percent, Decimal("20"))
 
     def test_submitting_a_request_puts_the_quote_under_negotiation(self):
         quotation = self._sent()
@@ -624,6 +677,74 @@ class BillingFlowTests(PortalTestBase):
         self.assertEqual(bill["amount_due"], quotation.total)
         self.assertFalse(bill["is_paid"])
         self.assertEqual(len(bill["lines"]), 1)
+
+    def _negotiated(self, target="12"):
+        """A deal where both sides agreed a figure, so the discount lands on
+        `order_discount_percent` rather than on the lines."""
+        quotation = self._quotation()
+        quotations.submit(quotation, actor=self.rep)
+        negotiation.send_to_customer(quotation, actor=self.rep)
+        request = negotiation.submit_request(
+            quotation, actor=self.buyer, requested_discount_percent=Decimal(target)
+        )
+        negotiation.accept_request(request, actor=self.rep)
+        quotation.refresh_from_db()
+        negotiation.confirm_by_customer(quotation, actor=self.buyer)
+        quotation.refresh_from_db()
+        return quotation
+
+    def test_the_negotiated_discount_reaches_the_bill(self):
+        """`line_total` is net of the LINE discount only. The negotiated figure
+        lands on `order_discount_percent`, so billing the lines straight charged
+        the price from before the negotiation — a deal closed at 10% off was
+        invoiced at full list and the customer overpaid by exactly the discount
+        they had agreed."""
+        quotation = self._negotiated()
+        self.assertGreater(quotation.order_discount_percent, Decimal("0"))
+
+        invoice = billing.raise_bill_for_quotation(quotation, actor=self.finance)
+
+        self.assertEqual(invoice.total, quotation.total)
+
+    def test_a_bill_with_no_negotiation_is_unchanged(self):
+        """The factor is 1 when nothing was agreed, so an ordinary deal bills
+        exactly as it did before."""
+        quotation = self._confirmed()
+        self.assertEqual(quotation.order_discount_percent, Decimal("0.00"))
+
+        invoice = billing.raise_bill_for_quotation(quotation, actor=self.finance)
+
+        self.assertEqual(invoice.total, quotation.total)
+
+    def test_the_invoice_line_states_the_whole_discount_not_just_the_line_one(self):
+        """A customer reads this document. Carrying only the line-level figure
+        while the total reflected both would show a line whose own numbers did
+        not multiply out — 5% shown against a total that had 12% taken off.
+
+        The percentage is stored to two places, so re-multiplying it cannot
+        reproduce the cent exactly; the LINE TOTAL is the authority on what is
+        owed and the percentage describes it. Hence a cent of tolerance here
+        and an exact assertion on the money.
+        """
+        quotation = self._negotiated()
+        invoice = billing.raise_bill_for_quotation(quotation, actor=self.finance)
+
+        lines = list(invoice.lines.all())
+        self.assertTrue(lines)
+        for line in lines:
+            gross = Decimal(line.quantity) * Decimal(line.unit_price)
+            # The stated discount is the effective one, well above the 5% the
+            # line itself carries.
+            self.assertGreater(Decimal(line.discount_percent), Decimal("5"))
+            implied = (
+                gross * (Decimal("100") - Decimal(line.discount_percent)) / Decimal("100")
+            )
+            self.assertLess(abs(implied - Decimal(line.line_total)), Decimal("0.05"))
+
+        # The money itself is exact.
+        self.assertEqual(
+            sum(Decimal(line.line_total) for line in lines), invoice.subtotal
+        )
 
     def test_a_deal_cannot_be_billed_before_it_is_confirmed(self):
         quotation = self._quotation()

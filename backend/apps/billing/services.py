@@ -11,6 +11,7 @@ from django.utils import timezone
 from apps.billing.models import CreditNote, Invoice, InvoiceLine, Payment
 from apps.common.enums import InvoiceStatus, InvoiceType, LineType
 from apps.common.errors import ValidationError
+from apps.quotations import services as quotation_services
 from apps.quotations.models import Quotation
 
 ZERO = Decimal("0")
@@ -46,16 +47,30 @@ def issue_one_time_invoice(quotation: Quotation, *, actor=None) -> Invoice | Non
         due_date=today + timedelta(days=DEFAULT_TERMS_DAYS),
         currency=quotation.currency,
     )
+    # The negotiated discount lands on `order_discount_percent`, not on the
+    # lines, so billing `line_total` straight charges the pre-negotiation price.
+    # A deal closed at 10% off was invoiced at full list and the customer
+    # overpaid by exactly the discount they had agreed.
+    factor = quotation_services.order_discount_factor(quotation)
+
     subtotal = tax_total = ZERO
     for line in lines:
-        net = Decimal(line.line_total)
+        gross = Decimal(line.line_subtotal)
+        net = (Decimal(line.line_total) * factor).quantize(Decimal("0.01"))
         tax = (net * Decimal(line.tax_percent) / HUNDRED).quantize(Decimal("0.01"))
+        # One discount per invoice line: everything actually taken off, so that
+        # unit price × quantity × (1 − discount) equals the line total. Carrying
+        # only the line-level figure would leave the arithmetic on a document
+        # the customer reads visibly not adding up.
+        effective_discount = (
+            ((gross - net) / gross * HUNDRED).quantize(Decimal("0.01")) if gross else ZERO
+        )
         InvoiceLine.objects.create(
             invoice=invoice,
             description=line.description,
             quantity=line.quantity,
             unit_price=line.unit_price,
-            discount_percent=line.discount_percent,
+            discount_percent=effective_discount,
             tax_percent=line.tax_percent,
             line_total=net,
             quotation_line=line,

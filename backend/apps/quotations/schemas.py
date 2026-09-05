@@ -112,6 +112,23 @@ class QuotationEventOut(Schema):
         return obj.actor.full_name or obj.actor.email if obj.actor_id else "System"
 
 
+class ClosureOut(Schema):
+    """Who ended this deal, and what they said.
+
+    Both an approver's rejection and a customer's decline land on REJECTED, so
+    the status alone cannot tell them apart. The screen needs to say which
+    happened - "closed by the customer" on a quote the Sales Manager refused
+    would be plainly wrong.
+    """
+
+    by_name: str | None = None
+    by_role: str | None = None
+    note: str = ""
+    at: datetime | None = None
+    #: True when the person who closed it was the customer, not internal staff.
+    by_customer: bool = False
+
+
 class QuotationDetailOut(QuotationSummaryOut):
     """Returned by EVERY quotation mutation, fully recomputed.
 
@@ -129,6 +146,8 @@ class QuotationDetailOut(QuotationSummaryOut):
     lines: list[QuotationLineOut]
     risk: RiskBreakdownOut
     events: list[QuotationEventOut]
+    #: Present only on a closed quotation.
+    closure: ClosureOut | None = None
 
 
 class CreateQuotationIn(Schema):

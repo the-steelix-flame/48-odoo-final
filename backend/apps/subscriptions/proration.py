@@ -153,17 +153,29 @@ def _fraction(period: Period, on: date, mode: str) -> Decimal:
     return period.fraction_remaining(on)
 
 
+#: Every cadence, as a number of calendar months. A table rather than an
+#: if-chain because this file is the one place a cadence becomes a date: an
+#: interval missing here raises on the confirm path, after the customer has
+#: already said yes. Keep it in step with `RecurringInterval`; the test
+#: `test_every_interval_has_a_period` fails if a new value is added and
+#: forgotten here.
+INTERVAL_MONTHS: dict[str, int] = {
+    "MONTHLY": 1,
+    "QUARTERLY": 3,
+    "YEARLY": 12,
+    "BIENNIAL": 24,
+}
+
+
 def next_period(start: date, interval: str) -> Period:
     """Roll the billing window forward by one interval."""
     if interval == "WEEKLY":
+        # The only cadence that isn't calendar-month arithmetic.
         return Period(start, start + timedelta(days=7))
-    if interval == "MONTHLY":
-        return Period(start, _add_months(start, 1))
-    if interval == "QUARTERLY":
-        return Period(start, _add_months(start, 3))
-    if interval == "YEARLY":
-        return Period(start, _add_months(start, 12))
-    raise ValueError(f"Unknown interval {interval}")
+    months = INTERVAL_MONTHS.get(interval)
+    if months is None:
+        raise ValueError(f"Unknown interval {interval}")
+    return Period(start, _add_months(start, months))
 
 
 def _add_months(d: date, months: int) -> date:

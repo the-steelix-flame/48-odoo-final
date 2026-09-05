@@ -19,6 +19,7 @@ from apps.common.enums import (
     SubscriptionStatus,
 )
 from apps.common.errors import ValidationError
+from apps.quotations import services as quotation_services
 from apps.quotations.models import Quotation
 from apps.subscriptions.models import RecurringPlan, Subscription, SubscriptionEvent
 from apps.subscriptions.proration import (
@@ -44,6 +45,10 @@ def activate_from_quotation(
     """
     created: list[Subscription] = []
     today = timezone.now().date()
+    # Same reason as the one-time invoice: the negotiated figure sits on
+    # `order_discount_percent`, so a subscription priced off `line_total` alone
+    # would bill the rate from before the negotiation — every period, forever.
+    factor = quotation_services.order_discount_factor(quotation)
 
     for line in quotation.lines.filter(line_type=LineType.RECURRING).select_related(
         "product", "recurring_plan"
@@ -62,9 +67,10 @@ def activate_from_quotation(
             plan=plan,
             product=line.product,
             quantity=line.quantity,
-            # Net of the discount the rep gave — the subscription inherits the
-            # negotiated price, not the list price.
-            unit_price=Decimal(line.line_total) / Decimal(line.quantity),
+            # Net of the discount the rep gave AND of anything agreed at the
+            # order level — the subscription inherits the negotiated price, not
+            # the list price.
+            unit_price=(Decimal(line.line_total) * factor) / Decimal(line.quantity),
             start_date=today,
             current_period_start=period.start,
             current_period_end=period.end,

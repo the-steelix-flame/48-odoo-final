@@ -14,6 +14,11 @@ from apps.quotations.models import Quotation
 
 router = Router(auth=internal_auth)
 
+#: Invoices and payments belong to Finance, with the Sales Manager able to see
+#: the cash position of their team's deals. A Sales Rep sells; what has been
+#: billed and collected afterwards is not theirs to see.
+VIEW_ROLES = (Role.FINANCE, Role.SALES_MANAGER)
+
 
 class InvoiceRowOut(Schema):
     id: int
@@ -195,6 +200,7 @@ def raise_bill(request, quotation_id: int):
 
 @router.get("/invoices", response=list[InvoiceRowOut])
 def list_invoices(request, status: str | None = None, customer_id: int | None = None):
+    require_role(request, *VIEW_ROLES)
     qs = Invoice.objects.select_related("customer")
     if status:
         qs = qs.filter(status=status)
@@ -205,6 +211,7 @@ def list_invoices(request, status: str | None = None, customer_id: int | None = 
 
 @router.get("/invoices/counts")
 def invoice_counts(request):
+    require_role(request, *VIEW_ROLES)
     """The two chips at the top of screen 12."""
     qs = Invoice.objects.all()
     return {
@@ -217,6 +224,7 @@ def invoice_counts(request):
 
 @router.get("/invoices/{invoice_id}", response=InvoiceDetailOut)
 def get_invoice(request, invoice_id: int):
+    require_role(request, *VIEW_ROLES)
     invoice = _get(invoice_id)
     data = {f: getattr(invoice, f) for f in (
         "id", "number", "customer_id", "invoice_type", "status", "issue_date", "due_date",
