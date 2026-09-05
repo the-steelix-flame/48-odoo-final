@@ -9,14 +9,16 @@ live in `accounts/api.py`.
 """
 
 from datetime import datetime
+from decimal import Decimal
 
 from ninja import Router, Schema
 
-from apps.accounts import analytics, businesses, plans, staff
+from apps.accounts import analytics, businesses, plans, staff, warehouses
 from apps.accounts.auth import internal_auth, require_role
 from apps.accounts.models import Customer, SalesTeam, User
 from apps.common.enums import Role
 from apps.common.errors import NotFound
+from apps.common.geo import clean_point
 
 router = Router(auth=internal_auth)
 
@@ -30,9 +32,24 @@ class BusinessOut(Schema):
     tier: str
     currency: str
     contact_email: str
+
+    #: Where this business receives goods. `latitude`/`longitude` are null until
+    #: the address is geocoded — see PLAN-distance-fulfillment.md. Nothing ranks
+    #: warehouses by them yet.
+    address: str = ""
+    latitude: Decimal | None = None
+    longitude: Decimal | None = None
+    has_coordinates: bool = False
+
     owner_rep_id: int | None = None
     owner_rep_name: str | None = None
     default_price_list_id: int | None = None
+
+    @staticmethod
+    def resolve_has_coordinates(obj) -> bool:
+        if isinstance(obj, dict):
+            return bool(obj.get("latitude") is not None and obj.get("longitude") is not None)
+        return obj.latitude is not None and obj.longitude is not None
 
     # Portal login state. `has_portal_login` and `portal_access_enabled` are
     # different questions: a business can have a login that is suspended.
@@ -104,6 +121,9 @@ class CreateBusinessIn(Schema):
     contact_email: str = ""
     tier: str = "BRONZE"
     currency: str = "USD"
+    address: str = ""
+    latitude: Decimal | None = None
+    longitude: Decimal | None = None
     owner_rep_id: int | None = None
     default_price_list_id: int | None = None
     create_portal_login: bool = True
@@ -114,6 +134,9 @@ class UpdateBusinessIn(Schema):
     tier: str | None = None
     currency: str | None = None
     contact_email: str | None = None
+    address: str | None = None
+    latitude: Decimal | None = None
+    longitude: Decimal | None = None
     owner_rep_id: int | None = None
     default_price_list_id: int | None = None
 
@@ -174,7 +197,19 @@ def get_business(request, business_id: int):
 def update_business(request, business_id: int, payload: UpdateBusinessIn):
     require_role(request, Role.ADMIN)
     business = _get(business_id)
-    for field, value in payload.dict(exclude_unset=True).items():
+    changes = payload.dict(exclude_unset=True)
+
+    # Coordinates move as a pair and are validated as one, against whatever is
+    # already on the row when only half of them was sent. Without this the
+    # generic setattr loop below would happily store a latitude on its own.
+    if "latitude" in changes or "longitude" in changes:
+        business.latitude, business.longitude = clean_point(
+            changes.pop("latitude", business.latitude),
+            changes.pop("longitude", business.longitude),
+        )
+        business.geocoded_at = None
+
+    for field, value in changes.items():
         if value is not None:
             setattr(business, field, value)
     business.save()
@@ -491,3 +526,111 @@ def set_plan_active(request, plan_id: int, payload: AccessIn):
     """Retire a plan or restore it. Never deletes — the billing history points here."""
     require_role(request, Role.ADMIN)
     return plans.set_active(plans.get_plan(plan_id), enabled=payload.enabled, actor=request.auth)
+
+
+# ==========================================================================
+# Warehouses
+# ==========================================================================
+# Warehouses could only be created by `seed_demo` or the Django admin, so an
+# operator could not add a depot at all. See PLAN-distance-fulfillment.md — the
+# coordinate fields below are Phase 1 scaffolding; nothing ranks by them yet.
+class WarehouseOut(Schema):
+    id: int
+    name: str
+    code: str
+    address: str = ""
+    latitude: Decimal | None = None
+    longitude: Decimal | None = None
+    has_coordinates: bool = False
+    shipping_cost_weight: Decimal
+    base_shipment_cost: Decimal
+    lead_time_days: int
+    is_active: bool
+
+    #: What retiring this warehouse would strand, shown on the row.
+    stock_line_count: int = 0
+    units_on_hand: int = 0
+
+    @staticmethod
+    def resolve_has_coordinates(obj) -> bool:
+        return obj.latitude is not None and obj.longitude is not None
+
+    @staticmethod
+    def resolve_stock_line_count(obj) -> int:
+        return warehouses.stock_summary(obj)[0]
+
+    @staticmethod
+    def resolve_units_on_hand(obj) -> int:
+        return warehouses.stock_summary(obj)[1]
+
+
+class CreateWarehouseIn(Schema):
+    name: str
+    code: str
+    address: str = ""
+    latitude: Decimal | None = None
+    longitude: Decimal | None = None
+    shipping_cost_weight: Decimal = Decimal("1")
+    base_shipment_cost: Decimal = Decimal("30")
+    lead_time_days: int = 3
+    is_active: bool = True
+
+
+class UpdateWarehouseIn(Schema):
+    """Every field optional — an absent key means "leave this one alone"."""
+
+    name: str | None = None
+    code: str | None = None
+    address: str | None = None
+    latitude: Decimal | None = None
+    longitude: Decimal | None = None
+    shipping_cost_weight: Decimal | None = None
+    base_shipment_cost: Decimal | None = None
+    lead_time_days: int | None = None
+    is_active: bool | None = None
+
+
+@router.get("/warehouses", response=list[WarehouseOut])
+def list_warehouses(request, include_retired: bool = True):
+    """Every warehouse. Unlike `/fulfillment/warehouses`, retired ones are
+    included — an admin who cannot see a retired warehouse cannot restore it."""
+    require_role(request, Role.ADMIN)
+    qs = warehouses.queryset()
+    if not include_retired:
+        qs = qs.filter(is_active=True)
+    return list(qs)
+
+
+@router.post("/warehouses", response=WarehouseOut)
+def create_warehouse(request, payload: CreateWarehouseIn):
+    """Register a warehouse. The splitter can use it as soon as it holds stock."""
+    require_role(request, Role.ADMIN)
+    return warehouses.create_warehouse(actor=request.auth, **payload.dict())
+
+
+@router.get("/warehouses/{warehouse_id}", response=WarehouseOut)
+def get_warehouse(request, warehouse_id: int):
+    require_role(request, Role.ADMIN)
+    return warehouses.get_warehouse(warehouse_id)
+
+
+@router.patch("/warehouses/{warehouse_id}", response=WarehouseOut)
+def update_warehouse(request, warehouse_id: int, payload: UpdateWarehouseIn):
+    # `exclude_unset` is what makes "clear the coordinates" expressible: sending
+    # latitude: null is a change, not sending the key at all is not.
+    require_role(request, Role.ADMIN)
+    return warehouses.update_warehouse(
+        warehouses.get_warehouse(warehouse_id),
+        actor=request.auth,
+        **payload.dict(exclude_unset=True),
+    )
+
+
+@router.post("/warehouses/{warehouse_id}/active", response=WarehouseOut)
+def set_warehouse_active(request, warehouse_id: int, payload: AccessIn):
+    """Retire a warehouse or restore it. Never deletes — stock rows and shipped
+    allocations both point here."""
+    require_role(request, Role.ADMIN)
+    return warehouses.set_active(
+        warehouses.get_warehouse(warehouse_id), enabled=payload.enabled, actor=request.auth
+    )

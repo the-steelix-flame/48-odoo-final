@@ -84,6 +84,18 @@ class Customer(TimeStampedModel):
     )
     currency = models.CharField(max_length=3, default="USD")
     contact_email = models.EmailField(blank=True)
+
+    #: Where this business receives goods, as the admin typed it. `latitude` /
+    #: `longitude` are the resolved point the fulfillment planner ranks
+    #: warehouses against — nullable because every row that predates this field
+    #: has none, and allocation has to keep working for them.
+    address = models.CharField(max_length=250, blank=True)
+    latitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
+    longitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
+    #: Set when the point came from geocoding the address, null when a human
+    #: typed it. Lets a re-geocode skip rows someone corrected by hand.
+    geocoded_at = models.DateTimeField(null=True, blank=True)
+
     owner_rep = models.ForeignKey(
         User, null=True, blank=True, on_delete=models.SET_NULL, related_name="owned_customers"
     )

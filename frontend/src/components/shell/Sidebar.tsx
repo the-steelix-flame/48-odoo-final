@@ -73,6 +73,7 @@ export function Sidebar() {
     { href: "/admin/users", label: "User management", roles: ["ADMIN"] },
     { href: "/admin/businesses", label: "Business management", roles: ["ADMIN"] },
     { href: "/admin/plans", label: "Subscription plans", roles: ["ADMIN"] },
+    { href: "/admin/warehouses", label: "Warehouse management", roles: ["ADMIN"] },
     {
       href: "/settings/discounts",
       label: "Discount & approval rules",

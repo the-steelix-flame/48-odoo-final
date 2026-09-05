@@ -775,6 +775,60 @@ the key — the endpoint, the `quotation_line_id` column on `NegotiationMessage`
 line-scoped rendering are all untouched, and a rep-side annotation UI could use them with no backend
 change.
 
+### Warehouse Management, and addresses on both ends of a shipment
+
+Phase 1 of [`PLAN-distance-fulfillment.md`](PLAN-distance-fulfillment.md). **No behaviour change** —
+this is the data and the admin surface that the distance-based splitter needs, landed on its own so
+the algorithm change can be reviewed as a small diff.
+
+The premise it starts from, corrected: `fulfillment/planner.py` is *not* a stub. It genuinely tries
+a single warehouse first, then greedy coverage, then backorder. What is fake is the number it ranks
+by — `Warehouse.shipping_cost_weight`, a static constant (`Main = 1.0`, `remote = 1.4`) that is
+identical whoever the goods are going to. So the suggestion is the same for a customer next door and
+one across the country, and replacing that one number is the whole feature.
+
+| File | Change |
+|---|---|
+| `common/geo.py` | **New.** `clean_point()` — the coordinate rule in one place, because two models carry a point and validating it twice would let the two drift. Dependency-free; `haversine_km` joins it in Phase 3. |
+| `accounts/models.py` | `Customer` gains `address`, `latitude`, `longitude`, `geocoded_at`. It had **no address field at all**. |
+| `fulfillment/models.py` | `Warehouse` gains `latitude`, `longitude`, `geocoded_at`. `address` already existed as unused free text. |
+| `accounts/warehouses.py` | **New.** `create_warehouse`, `update_warehouse`, `set_active`, validation. |
+| `accounts/admin_api.py` | `/admin/warehouses` CRUD + `/active`. Business schemas gain the address fields. |
+| `accounts/businesses.py` | `create_business` takes an address and a point. |
+| `app/(app)/admin/warehouses/page.tsx` | **New.** List, create, edit, retire/restore. |
+| `app/(app)/admin/businesses/page.tsx` | Delivery address on the form and in the table. |
+| `components/shell/Sidebar.tsx` | Warehouse management, Admin only. |
+
+**There was no way to create a warehouse.** `GET /fulfillment/warehouses` is read-only; warehouses
+came only from `seed_demo` or the Django admin. A warehouse decides what the splitter is even
+allowed to consider, which makes defining one an admin act — so this follows the `plans.py`
+precedent exactly: new file in `accounts`, no structural change to `fulfillment/`.
+
+**Coordinates are nullable on purpose.** Every existing customer and warehouse row has none, and
+allocation has to keep working for them — Phase 3's fallback to `shipping_cost_weight` is the
+feature's safety net, not an afterthought.
+
+Guards, each of which is a way to break allocation from the UI:
+
+| Guard | Why |
+|---|---|
+| Both coordinates or neither | A latitude alone reads as the prime meridian — a confidently wrong position, worse than no position. |
+| Range-checked (-90..90, -180..180) | An out-of-range value is not a near-miss; it is a swapped pair or metres. |
+| Cost weight must be > 0 | The splitter sorts on it and multiplies by it. Zero makes every warehouse look free and identical; a negative inverts the ranking. |
+| The last active warehouse cannot be retired | `plan_split` answers "No active warehouses configured" and backorders every line of every order. One click, all future allocation broken, nothing on screen saying why. |
+| Retiring never deletes | `StockItem` and `FulfillmentAllocation` both FK to the warehouse — deleting cascades away real inventory or orphans the record of where an order shipped from. |
+| Codes upper-cased, names and codes unique case-insensitively | The column is unique and case-sensitive, so `wh-1` and `WH-1` would both be accepted and read as one code. |
+
+Hand-typed coordinates clear `geocoded_at`, which is what will stop Phase 2's re-geocode from
+overwriting a correction someone made by hand.
+
+**On reusing `the-steelix-flame/aera`** — checked, and there is nothing to lift. It is a fork of an
+air-quality routing hackathon: one FastAPI file that calls open-meteo and asks Gemini whether
+there's a landfill nearby, plus a Leaflet frontend. No distance math and no geocoding module. What
+it does demonstrate is the two public endpoints worth using — Nominatim to geocode and OSRM to
+route — and those are recorded in the plan, with Nominatim's 1-request-per-second policy as the
+reason geocoding belongs at write time rather than in the allocation path.
+
 ---
 
 ## 2. What this is NOT (scope decision)

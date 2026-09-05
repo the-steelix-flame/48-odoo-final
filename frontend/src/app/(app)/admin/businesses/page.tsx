@@ -38,6 +38,9 @@ export default function BusinessManagementPage() {
   const [email, setEmail] = useState("");
   const [tier, setTier] = useState<CustomerTier>("BRONZE");
   const [currency, setCurrency] = useState("USD");
+  const [address, setAddress] = useState("");
+  const [latitude, setLatitude] = useState("");
+  const [longitude, setLongitude] = useState("");
   const [ownerRepId, setOwnerRepId] = useState("");
   const [withLogin, setWithLogin] = useState(true);
 
@@ -80,6 +83,11 @@ export default function BusinessManagementPage() {
           contact_email: email,
           tier,
           currency,
+          address,
+          // Sent as null rather than "" so the server sees "no coordinate"
+          // instead of a value it has to parse and reject.
+          latitude: latitude.trim() || null,
+          longitude: longitude.trim() || null,
           owner_rep_id: ownerRepId ? Number(ownerRepId) : null,
           create_portal_login: withLogin,
         }),
@@ -90,6 +98,9 @@ export default function BusinessManagementPage() {
       setName("");
       setEmail("");
       setTier("BRONZE");
+      setAddress("");
+      setLatitude("");
+      setLongitude("");
       setOwnerRepId("");
     }
   }
@@ -205,6 +216,36 @@ export default function BusinessManagementPage() {
                     maxLength={3}
                   />
                 </Field>
+                <Field
+                  label="Delivery address"
+                  hint="Where their orders ship to. Used to pick the nearest warehouse."
+                >
+                  <input
+                    className={inputClass}
+                    value={address}
+                    onChange={(e) => setAddress(e.target.value)}
+                    placeholder="44 Harbour Street, Mumbai"
+                  />
+                </Field>
+                <Field
+                  label="Latitude"
+                  hint="Optional — filled automatically from the address later."
+                >
+                  <input
+                    className={inputClass}
+                    value={latitude}
+                    onChange={(e) => setLatitude(e.target.value)}
+                    placeholder="19.0760"
+                  />
+                </Field>
+                <Field label="Longitude" hint="Give both or neither.">
+                  <input
+                    className={inputClass}
+                    value={longitude}
+                    onChange={(e) => setLongitude(e.target.value)}
+                    placeholder="72.8777"
+                  />
+                </Field>
                 <Field label="Account manager">
                   <select
                     className={inputClass}
@@ -260,6 +301,7 @@ export default function BusinessManagementPage() {
             columns={[
               "Business",
               "Tier",
+              "Delivery address",
               "Account manager",
               "Portal login",
               "Access",
@@ -286,6 +328,16 @@ export default function BusinessManagementPage() {
                   >
                     {business.tier}
                   </Badge>
+                </Cell>
+                <Cell className="max-w-[220px] text-slate-400">
+                  {business.address || <span className="text-slate-500">Not set</span>}
+                  {/* Says whether the planner could actually use this address.
+                      An address with no point is not yet a location. */}
+                  {business.address && !business.has_coordinates && (
+                    <span className="mt-[2px] block text-[11px] text-[#D97706]">
+                      Not located yet
+                    </span>
+                  )}
                 </Cell>
                 <Cell className="text-slate-400">{business.owner_rep_name ?? "—"}</Cell>
                 <Cell className="font-mono text-xs text-slate-400">

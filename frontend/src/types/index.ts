@@ -113,6 +113,17 @@ export interface Business {
   tier: CustomerTier;
   currency: string;
   contact_email: string;
+
+  /**
+   * Where this business receives goods. `latitude`/`longitude` are null until
+   * the address is geocoded — see PLAN-distance-fulfillment.md. Nothing ranks
+   * warehouses by them yet; the fields exist so Phase 3 is a small diff.
+   */
+  address: string;
+  latitude?: string | null;
+  longitude?: string | null;
+  has_coordinates: boolean;
+
   owner_rep_id?: number | null;
   owner_rep_name?: string | null;
   default_price_list_id?: number | null;
@@ -136,6 +147,43 @@ export interface BusinessCredentials {
   portal_login_email: string;
   password: string;
   notice: string;
+}
+
+/**
+ * A stock location, as the admin back-end sees it. `/fulfillment/warehouses`
+ * returns only active ones for operational screens; this one includes retired
+ * warehouses, because an admin who cannot see one cannot restore it.
+ *
+ * Decimals arrive from the API as STRINGS. Parse them for display only.
+ */
+export interface Warehouse {
+  id: number;
+  name: string;
+  code: string;
+  address: string;
+  latitude?: string | null;
+  longitude?: string | null;
+  has_coordinates: boolean;
+  shipping_cost_weight: string;
+  base_shipment_cost: string;
+  lead_time_days: number;
+  is_active: boolean;
+  /** What retiring this warehouse would strand. */
+  stock_line_count: number;
+  units_on_hand: number;
+}
+
+/** The create form's payload. Every field the admin can set at creation. */
+export interface WarehouseInput {
+  name: string;
+  code: string;
+  address: string;
+  latitude: string | null;
+  longitude: string | null;
+  shipping_cost_weight: string;
+  base_shipment_cost: string;
+  lead_time_days: number;
+  is_active: boolean;
 }
 
 /** A user account as seen from the admin back-end. */
