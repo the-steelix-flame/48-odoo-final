@@ -15,6 +15,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 
 import { ApiError, del, patch, post } from "@/lib/api";
+import { RepNegotiationPanel } from "@/components/negotiation/RepNegotiationPanel";
 import {
   Badge,
   Button,
@@ -330,6 +331,16 @@ export default function QuotationBuilderPage({ params }: { params: Promise<{ id:
               </Note>
             </div>
           </Card>
+
+          {/* ------------------------------------------- negotiation */}
+          <RepNegotiationPanel
+            quotationId={id}
+            onQuotationChanged={() => {
+              // Accepting a counter rewrites every line's discount and
+              // re-scores the quote, so the cart above is stale.
+              void reload();
+            }}
+          />
 
           {/* ------------------------------------------- audit trail */}
           <Card title="Audit trail" subtitle="Every edit, approval and negotiation, logged">

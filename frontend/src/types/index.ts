@@ -75,6 +75,109 @@ export interface Customer {
   default_price_list_id?: number | null;
 }
 
+// ------------------------------------------------- admin / business mgmt
+// Added by the-steelix-flame. Additive only — nothing above was changed.
+
+/** A company you sell to, as seen from the admin back-end. */
+export interface Business {
+  id: number;
+  name: string;
+  tier: CustomerTier;
+  currency: string;
+  contact_email: string;
+  owner_rep_id?: number | null;
+  owner_rep_name?: string | null;
+  default_price_list_id?: number | null;
+
+  /** Has a login at all, vs. has one that is currently usable — different questions. */
+  has_portal_login: boolean;
+  portal_login_email?: string | null;
+  portal_access_enabled: boolean;
+  portal_last_login?: string | null;
+  portal_created_at?: string | null;
+
+  quotation_count: number;
+}
+
+/**
+ * Returned ONLY by create / issue-login / reset-password. The password is
+ * never stored in readable form and can never be fetched again.
+ */
+export interface BusinessCredentials {
+  business: Business;
+  portal_login_email: string;
+  password: string;
+  notice: string;
+}
+
+/** A user account as seen from the admin back-end. */
+export interface AdminUser {
+  id: number;
+  email: string;
+  full_name: string;
+  role: Role;
+  is_active: boolean;
+  sales_team_id?: number | null;
+  sales_team_name?: string | null;
+  date_joined?: string | null;
+  last_login?: string | null;
+  quotations_owned: number;
+  approvals_made: number;
+  /** Set only for CUSTOMER accounts that are linked to a business. */
+  business_name?: string | null;
+}
+
+export interface UserCredentials {
+  user: AdminUser;
+  email: string;
+  password: string;
+  notice: string;
+}
+
+export interface AnalyticsMetric {
+  label: string;
+  value: string;
+  hint?: string | null;
+}
+
+/** Which sections come back depends on the user's role. */
+export interface AnalyticsSection {
+  title: string;
+  metrics: AnalyticsMetric[];
+}
+
+export interface UserQuotationRef {
+  id: number;
+  number: string;
+  customer_name: string;
+  status: QuotationStatus;
+  risk_band: RiskBand;
+  total: string;
+  created_at: string;
+}
+
+export interface UserDecisionRef {
+  quotation_id: number;
+  quotation_number: string;
+  customer_name: string;
+  decision: ApprovalStatus;
+  note: string;
+  acted_at?: string | null;
+}
+
+export interface AdminUserDetail {
+  user: AdminUser;
+  window_days: number;
+  sections: AnalyticsSection[];
+  recent_quotations: UserQuotationRef[];
+  recent_decisions: UserDecisionRef[];
+}
+
+export interface SalesTeam {
+  id: number;
+  name: string;
+}
+
 // ---------------------------------------------------------------- catalog
 export interface Category {
   id: number;
@@ -478,12 +581,19 @@ export interface PortalLine {
   // NOTE: no cost, no margin, no risk. The portal serialiser never sends them.
 }
 
-export interface PortalMessage {
-  id: number;
-  quotation_line_id?: number | null;
-  line_description?: string | null;
+/**
+ * One entry in the negotiation thread. Both the rep's panel and the customer
+ * portal render this same list — one shared record of who said what, so
+ * neither side can be looking at a different story.
+ */
+export interface TimelineEntry {
+  kind: "MESSAGE" | "COUNTER_REQUEST" | "REP_COUNTER" | "ACCEPTED" | "REJECTED";
   author_type: "CUSTOMER" | "REP";
+  author_name: string;
   body: string;
+  discount_percent?: string | null;
+  delivery_date?: string | null;
+  line_description?: string | null;
   created_at: string;
 }
 
@@ -491,16 +601,47 @@ export interface PortalRequest {
   id: number;
   requested_discount_percent?: string | null;
   requested_delivery_date?: string | null;
+  /** What we offered back, when we countered rather than accepting. */
+  counter_discount_percent?: string | null;
   message: string;
   status: "SUBMITTED" | "ACCEPTED" | "REJECTED" | "COUNTERED";
   resolution_note: string;
   created_at: string;
 }
 
+/** The rep's view of the conversation, on the quotation itself. */
+export interface NegotiationView {
+  quotation_id: number;
+  quotation_number: string;
+  customer_name: string;
+  status: QuotationStatus;
+  has_thread: boolean;
+  timeline: TimelineEntry[];
+  open_request?: PortalRequest | null;
+  requests: PortalRequest[];
+}
+
+/** One row of the customer's quotation list. Deliberately thin. */
+export interface PortalQuotationRow {
+  id: number;
+  number: string;
+  status: QuotationStatus;
+  /** Customer-facing wording, decided by the backend. */
+  status_label: string;
+  /** True when the customer is the one holding things up. */
+  action_required: boolean;
+  currency: string;
+  total: string;
+  line_count: number;
+  sent_at?: string | null;
+}
+
 export interface PortalQuotation {
   id: number;
   number: string;
   status: QuotationStatus;
+  status_label: string;
+  action_required: boolean;
   currency: string;
   subtotal: string;
   discount_total: string;
@@ -509,8 +650,10 @@ export interface PortalQuotation {
   valid_until?: string | null;
   company_name: string;
   lines: PortalLine[];
-  messages: PortalMessage[];
+  timeline: TimelineEntry[];
   requests: PortalRequest[];
+  /** Non-null with a counter_discount_percent means it's the customer's move. */
+  open_request?: PortalRequest | null;
 }
 
 // ---------------------------------------------- negotiation (internal inbox)

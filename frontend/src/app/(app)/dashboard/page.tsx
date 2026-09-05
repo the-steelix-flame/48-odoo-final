@@ -11,7 +11,7 @@ import { useAuth } from "@/lib/auth";
 import type { DashboardData } from "@/types";
 
 export default function DashboardPage() {
-  const { user } = useAuth();
+  const { user, role } = useAuth();
   const { data, error, loading, reload } = useApi<DashboardData>("/insights/dashboard");
 
   if (loading) return <Loading />;
@@ -25,11 +25,18 @@ export default function DashboardPage() {
         
         <div className="relative z-10 flex flex-wrap items-end justify-between gap-6">
           <div>
+            {/* An admin reaches this from a nav item labelled "Analytics", so
+                landing on a personal greeting reads as the wrong page. Same
+                screen, named for what it is to whoever opened it. */}
             <h1 className="font-heading text-[32px] font-bold tracking-[-0.03em]">
-              Welcome back, {user?.full_name?.split(" ")[0] ?? "there"}
+              {role === "ADMIN"
+                ? "Platform Analytics"
+                : `Welcome back, ${user?.full_name?.split(" ")[0] ?? "there"}`}
             </h1>
             <p className="mt-[6px] text-[15px] text-[#9CAABC]">
-              Here's what's happening with your deals today.
+              {role === "ADMIN"
+                ? "Platform-wide activity across every team."
+                : "Here's what's happening with your deals today."}
             </p>
           </div>
           <div className="flex gap-[12px]">

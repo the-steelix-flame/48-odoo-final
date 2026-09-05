@@ -28,6 +28,7 @@ api.add_router("/catalog/", catalog_router, tags=["catalog"])
 api.add_router("/governance/", governance_router, tags=["governance"])
 
 # --- the-steelix-flame ----------------------------------------------------
+from apps.accounts.admin_api import router as admin_router  # noqa: E402
 from apps.approvals.api import router as approvals_router  # noqa: E402
 from apps.negotiation.api import router as portal_router  # noqa: E402
 from apps.quotations.api import router as quotations_router  # noqa: E402
@@ -35,6 +36,7 @@ from apps.quotations.api import router as quotations_router  # noqa: E402
 api.add_router("/quotations/", quotations_router, tags=["quotations"])
 api.add_router("/approvals/", approvals_router, tags=["approvals"])
 api.add_router("/portal/", portal_router, tags=["portal"])
+api.add_router("/admin/", admin_router, tags=["admin"])
 
 # --- anubhaw0raj ----------------------------------------------------------
 from apps.billing.api import router as billing_router  # noqa: E402

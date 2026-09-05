@@ -15,7 +15,14 @@ import type {
   Role,
 } from "@/types";
 
-type NavItem = { href: string; label: string; badge?: number; roles?: Role[] };
+type NavItem = {
+  href: string;
+  label: string;
+  badge?: number;
+  roles?: Role[];
+  /** Per-role label override — the same screen can mean different things. */
+  labelByRole?: Partial<Record<Role, string>>;
+};
 
 /** Statuses that still want a human. A CONFIRMED quote is finished work, so
  *  counting it would make the badge grow forever and mean nothing. */
@@ -43,7 +50,13 @@ export function Sidebar() {
   ).length;
 
   const NAV: NavItem[] = [
-    { href: "/dashboard", label: "Dashboard" },
+    {
+      href: "/dashboard",
+      label: "Dashboard",
+      // For an admin this screen is a platform-wide read, not a personal
+      // worklist, so it's named for what it does for them.
+      labelByRole: { ADMIN: "Analytics" },
+    },
     { href: "/quotations", label: "Quotations", badge: openQuotes },
     { href: "/approvals", label: "Approvals", badge: approvals?.pending },
     { href: "/negotiations", label: "Negotiations", badge: negotiations?.length },
@@ -55,7 +68,25 @@ export function Sidebar() {
     { href: "/products", label: "Products" },
   ];
 
-  const visible = NAV.filter((item) => !item.roles || (role && item.roles.includes(role)));
+  /**
+   * Configuration screens, pinned below the operational ones. Gated to the
+   * roles that can actually save them — the discount rules link used to show
+   * for everyone while its save endpoints require Admin or Sales Manager, so a
+   * Rep could edit the ceilings and only meet the 403 on save.
+   */
+  const CONFIG_NAV: NavItem[] = [
+    { href: "/admin/users", label: "User management", roles: ["ADMIN"] },
+    { href: "/admin/businesses", label: "Business management", roles: ["ADMIN"] },
+    {
+      href: "/settings/discounts",
+      label: "Discount & approval rules",
+      roles: ["ADMIN", "SALES_MANAGER"],
+    },
+  ];
+
+  const canSee = (item: NavItem) => !item.roles || (role && item.roles.includes(role));
+  const visible = NAV.filter(canSee);
+  const visibleConfig = CONFIG_NAV.filter(canSee);
 
   return (
     <aside className="sticky top-0 flex h-screen w-[240px] shrink-0 flex-col gap-1 overflow-auto border-r border-[#1b2a3c] bg-gradient-to-b from-[#24354c] to-[#2c4459] p-[18px_14px]">
@@ -91,7 +122,9 @@ export function Sidebar() {
                 active ? "bg-[#22D3EE] shadow-[0_0_8px_#22D3EE]" : "bg-[#6b7d92]"
               }`}
             ></span>
-            <span className="flex-1">{item.label}</span>
+            <span className="flex-1">
+              {(role && item.labelByRole?.[role]) || item.label}
+            </span>
             {/* `{0 && …}` renders a literal 0, and "nothing waiting" is better
                 said with no badge at all than with a grey zero. */}
             {item.badge !== undefined && item.badge > 0 ? (
@@ -104,16 +137,23 @@ export function Sidebar() {
       })}
 
       <div className="mt-auto flex flex-col gap-1 border-t border-white/15 pt-4">
-        <Link
-          href="/settings/discounts"
-          className={`flex items-center gap-[9px] rounded-[10px] p-[10px_11px] text-[13.5px] transition hover:bg-white/10 hover:text-[#F8FAFC] ${
-            pathname.startsWith("/settings")
-              ? "bg-gradient-to-r from-[rgba(34,211,238,0.22)] to-[rgba(20,184,166,0.05)] font-semibold text-[#F0FCFF] shadow-[0_0_20px_-8px_rgba(34,211,238,0.7)] border-l-2 border-[#22D3EE]"
-              : "bg-transparent font-medium text-[#B7C4D4] border-l-2 border-transparent"
-          }`}
-        >
-          Discount & approval rules
-        </Link>
+        {visibleConfig.map((item) => {
+          const active =
+            pathname === item.href || pathname.startsWith(`${item.href}/`);
+          return (
+            <Link
+              key={item.href}
+              href={item.href}
+              className={`flex items-center gap-[9px] rounded-[10px] p-[10px_11px] text-[13.5px] transition hover:bg-white/10 hover:text-[#F8FAFC] ${
+                active
+                  ? "bg-gradient-to-r from-[rgba(34,211,238,0.22)] to-[rgba(20,184,166,0.05)] font-semibold text-[#F0FCFF] shadow-[0_0_20px_-8px_rgba(34,211,238,0.7)] border-l-2 border-[#22D3EE]"
+                  : "bg-transparent font-medium text-[#B7C4D4] border-l-2 border-transparent"
+              }`}
+            >
+              {item.label}
+            </Link>
+          );
+        })}
         <Link
           href="/portal"
           className="flex items-center gap-[9px] rounded-[9px] p-[9px_10px] text-[13.5px] font-medium text-[#B7C4D4] transition hover:bg-white/10 hover:text-[#F8FAFC]"

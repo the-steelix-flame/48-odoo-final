@@ -10,8 +10,10 @@
  */
 
 import { use, useState } from "react";
+import Link from "next/link";
 
 import { ApiError, post } from "@/lib/api";
+import { NegotiationThread } from "@/components/negotiation/Thread";
 import {
   Badge,
   Button,
@@ -44,6 +46,7 @@ export default function PortalQuotationPage({ params }: { params: Promise<{ id: 
   const [deliveryDate, setDeliveryDate] = useState("");
   const [message, setMessage] = useState("");
   const [lineComment, setLineComment] = useState<Record<number, string>>({});
+  const [chat, setChat] = useState("");
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [confirmNotice, setConfirmNotice] = useState<string | null>(null);
@@ -67,7 +70,16 @@ export default function PortalQuotationPage({ params }: { params: Promise<{ id: 
   }
   if (!data) return null;
 
-  const open = data.status === "SENT" || data.status === "UNDER_NEGOTIATION";
+  const open =
+    data.status === "SENT" ||
+    data.status === "UNDER_NEGOTIATION" ||
+    data.status === "APPROVED";
+  // A countered request with a number on it is our offer, waiting on them.
+  const counterOffer =
+    data.open_request?.status === "COUNTERED" &&
+    data.open_request.counter_discount_percent != null
+      ? data.open_request
+      : null;
 
   async function submitRequest() {
     setBusy(true);
@@ -121,7 +133,20 @@ export default function PortalQuotationPage({ params }: { params: Promise<{ id: 
         title={`Quotation ${data.number}`}
         subtitle={`Prepared for ${data.company_name}`}
         actions={
-          <Badge tone={STATUS_TONE[data.status] ?? "slate"}>{titleCase(data.status)}</Badge>
+          <>
+            {/* Plain-language status from the backend. The internal names
+                ("Pending Approval") leak process a customer shouldn't have to
+                interpret. */}
+            <Badge tone={data.action_required ? "amber" : STATUS_TONE[data.status] ?? "slate"}>
+              {data.status_label}
+            </Badge>
+            <Link
+              href="/portal"
+              className="rounded-lg border border-edge px-4 py-2 text-sm text-slate-200 hover:bg-surface"
+            >
+              All quotations
+            </Link>
+          </>
         }
       />
 
@@ -241,61 +266,89 @@ export default function PortalQuotationPage({ params }: { params: Promise<{ id: 
         </Card>
       )}
 
-      {data.requests.length > 0 && (
-        <Card title="Your requests" className="mb-6">
-          <Table columns={["Requested", "Discount", "Delivery", "Status", "Response"]}>
-            {data.requests.map((request) => (
-              <Row key={request.id}>
-                <Cell className="text-[#64748B]">{dateTime(request.created_at)}</Cell>
-                <Cell>
-                  {request.requested_discount_percent
-                    ? percent(request.requested_discount_percent, 0)
-                    : "—"}
-                </Cell>
-                <Cell>{request.requested_delivery_date ?? "—"}</Cell>
-                <Cell>
-                  <Badge
-                    tone={
-                      request.status === "ACCEPTED"
-                        ? "green"
-                        : request.status === "REJECTED"
-                          ? "red"
-                          : "amber"
-                    }
-                  >
-                    {titleCase(request.status)}
-                  </Badge>
-                </Cell>
-                <Cell className="text-[#64748B]">{request.resolution_note || "—"}</Cell>
-              </Row>
-            ))}
-          </Table>
-        </Card>
+      {/* ---------------------------------------- our counter-offer */}
+      {counterOffer && (
+        <div className="mb-6 rounded-xl border border-[#BAE6FD] bg-[#F0F9FF] p-5">
+          <h2 className="text-base font-semibold text-[#0C4A6E]">We&apos;ve made you an offer</h2>
+          <p className="mt-1 text-sm text-[#0369A1]">
+            You asked for {percent(counterOffer.requested_discount_percent, 0)}. We can offer{" "}
+            <strong>{percent(counterOffer.counter_discount_percent, 0)}</strong>.
+            {counterOffer.resolution_note && ` ${counterOffer.resolution_note}`}
+          </p>
+          <div className="mt-4 flex flex-wrap gap-2">
+            <Button
+              variant="success"
+              disabled={busy}
+              onClick={async () => {
+                setBusy(true);
+                setActionError(null);
+                try {
+                  setData(
+                    await post<PortalQuotation>(
+                      `/portal/quotations/${id}/requests/${counterOffer.id}/accept`,
+                    ),
+                  );
+                } catch (err) {
+                  setActionError(err instanceof ApiError ? err.message : "Could not accept");
+                } finally {
+                  setBusy(false);
+                }
+              }}
+            >
+              Accept {percent(counterOffer.counter_discount_percent, 0)}
+            </Button>
+            <span className="self-center text-xs text-[#64748B]">
+              …or propose something different below.
+            </span>
+          </div>
+        </div>
       )}
 
-      {data.messages.length > 0 && (
-        <Card title="Conversation">
-          <ul className="space-y-3">
-            {data.messages.map((msg) => (
-              <li
-                key={msg.id}
-                className={`rounded-lg border border-edge p-3 ${
-                  msg.author_type === "CUSTOMER" ? "bg-[#F8FAFC]" : "bg-blue-950/20"
-                }`}
+      <Card title="Conversation" className="mb-6">
+        <NegotiationThread
+          entries={data.timeline}
+          viewpoint="CUSTOMER"
+          emptyHint="Questions and counter-offers appear here."
+        />
+
+        {open && (
+          <div className="mt-5 border-t border-edge pt-4">
+            <Field label="Send a message" hint="For anything that isn't about price.">
+              <textarea
+                rows={2}
+                className={inputClass}
+                value={chat}
+                onChange={(e) => setChat(e.target.value)}
+                placeholder="Type a message…"
+              />
+            </Field>
+            <div className="mt-3">
+              <Button
+                variant="secondary"
+                disabled={busy || !chat.trim()}
+                onClick={async () => {
+                  setBusy(true);
+                  setActionError(null);
+                  try {
+                    setData(
+                      await post<PortalQuotation>(`/portal/quotations/${id}/messages`, {
+                        body: chat,
+                      }),
+                    );
+                    setChat("");
+                  } catch (err) {
+                    setActionError(err instanceof ApiError ? err.message : "Could not send");
+                  } finally {
+                    setBusy(false);
+                  }
+                }}
               >
-                <div className="flex items-center justify-between gap-3">
-                  <span className="text-xs font-medium text-[#64748B]">
-                    {msg.author_type === "CUSTOMER" ? "You" : "Your account manager"}
-                    {msg.line_description && ` · ${msg.line_description}`}
-                  </span>
-                  <span className="text-xs text-slate-500">{dateTime(msg.created_at)}</span>
-                </div>
-                <p className="mt-1.5 text-sm text-[#334155]">{msg.body}</p>
-              </li>
-            ))}
-          </ul>
-        </Card>
-      )}
+                Send message
+              </Button>
+            </div>
+          </div>
+        )}
+      </Card>
     </>
   );
 }
