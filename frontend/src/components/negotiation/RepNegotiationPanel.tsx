@@ -164,15 +164,14 @@ export function RepNegotiationPanel({
                 variant="success"
                 disabled={busy}
                 onClick={() =>
-                  // Accepting already appends an ACCEPTED event carrying the
-                  // agreed figure, so there is nothing to post on top of it.
+                  // One call. This used to accept and then POST to
+                  // `/internal/quotations/{id}/negotiation` to refresh — a
+                  // GET-only route, which answered 405. The accept had already
+                  // gone through by then, so the deal moved while the screen
+                  // showed an error. The accept endpoint now returns the
+                  // conversation itself.
                   run(
-                    async () => {
-                      await post(`/portal/internal/requests/${open!.id}/accept`);
-                      return post(
-                        `/portal/internal/quotations/${quotationId}/negotiation`,
-                      );
-                    },
+                    () => post(`/portal/internal/requests/${open!.id}/accept`),
                     true,
                   )
                 }

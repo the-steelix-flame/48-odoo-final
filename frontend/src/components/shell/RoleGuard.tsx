@@ -38,7 +38,7 @@ export function RoleGuard({
       <>
         <PageHeader title={title} />
         <Card>
-          <p className="text-sm text-slate-300">
+          <p className="text-sm text-[#475569]">
             This area is available to {allowed} accounts. You&apos;re signed in as{" "}
             <strong>{role?.replace("_", " ").toLowerCase()}</strong>.
           </p>

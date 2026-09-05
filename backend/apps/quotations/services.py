@@ -61,6 +61,11 @@ ALLOWED_TRANSITIONS: dict[str, set[str]] = {
     },
     QuotationStatus.SENT: {
         QuotationStatus.UNDER_NEGOTIATION,
+        # A sent quote whose terms now breach a ceiling has to be able to go
+        # back for approval. Without this the customer pressed Accept and got
+        # "Cannot move a quotation from SENT to PENDING_APPROVAL" — the guard
+        # firing correctly on a route that simply did not exist.
+        QuotationStatus.PENDING_APPROVAL,
         QuotationStatus.CONFIRMED,
         QuotationStatus.REJECTED,
         QuotationStatus.CANCELLED,
@@ -73,7 +78,9 @@ ALLOWED_TRANSITIONS: dict[str, set[str]] = {
         QuotationStatus.CANCELLED,
     },
     QuotationStatus.CONFIRMED: set(),
-    QuotationStatus.REJECTED: {QuotationStatus.DRAFT},
+    # Terminal. Matches WORKFLOW.md, which has always drawn REJECTED as an end
+    # state; the DRAFT edge let a refused quote be quietly revived in place.
+    QuotationStatus.REJECTED: set(),
     QuotationStatus.CANCELLED: set(),
 }
 
@@ -497,11 +504,18 @@ def assert_editable(quotation: Quotation) -> None:
 
 
 def _assert_editable(quotation: Quotation) -> None:
-    editable = {
-        QuotationStatus.DRAFT,
-        QuotationStatus.UNDER_NEGOTIATION,
-        QuotationStatus.REJECTED,
-    }
+    # REJECTED is deliberately NOT here. A closed deal is finished: reopening it
+    # by editing the lines would silently resurrect a quotation the approver or
+    # the customer had already refused, under the same number and with the
+    # rejection still sitting in its audit trail. If the deal is back on, it is a
+    # new quotation.
+    # DRAFT only. While a quotation is UNDER_NEGOTIATION the terms are what the
+    # two sides are arguing about, and they move by accept or counter - both of
+    # which set order_discount_percent directly. Hand-editing a line underneath
+    # a live counter-offer would change the thing being negotiated without the
+    # other side seeing it, and the customer would be answering a quote that no
+    # longer exists.
+    editable = {QuotationStatus.DRAFT}
     if quotation.status not in editable:
         raise InvalidTransition(
             f"A quotation in {quotation.status} cannot be edited",

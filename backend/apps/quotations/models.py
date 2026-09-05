@@ -45,6 +45,11 @@ class Quotation(TimeStampedModel):
     valid_until = models.DateField(null=True, blank=True)
     #: Stalled-deal detection reads this. Touched by every audited write.
     last_activity_at = models.DateTimeField(default=timezone.now)
+    #: Set when the customer accepts our counter-offer. If the agreed terms then
+    #: need approval, the approvers are the only ones left to decide — the
+    #: customer has already committed, so clearing approval confirms the order
+    #: rather than sending it back for a second yes.
+    customer_accepted_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         db_table = "quotation"
