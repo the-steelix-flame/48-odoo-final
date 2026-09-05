@@ -1,6 +1,6 @@
 /** Display helpers.  Owner: sinjeki. */
 
-import type { QuotationStatus, RiskBand } from "@/types";
+import type { QuotationStatus, RiskBand, Role } from "@/types";
 
 /** Money arrives from the API as a decimal STRING — never parse it into a
  *  float for arithmetic, only for display. */
@@ -65,4 +65,15 @@ export const RISK_LABEL: Record<RiskBand, string> = {
   NONE: "No approval needed",
   MEDIUM: "Sales Manager approval",
   HIGH: "Sales Manager, then Finance",
+};
+
+/** How each role is named to the person holding it.  "Finance / Operations"
+ *  matches the wording on the signup form, so the badge in the header reads
+ *  the same as the role they were given. */
+export const ROLE_LABEL: Record<Role, string> = {
+  ADMIN: "Admin",
+  SALES_MANAGER: "Sales Manager",
+  SALES_REP: "Sales Rep",
+  FINANCE: "Finance / Operations",
+  CUSTOMER: "Customer",
 };

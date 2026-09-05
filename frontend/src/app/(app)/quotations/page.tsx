@@ -166,12 +166,16 @@ export default function QuotationsPage() {
           hint="Create one above, or run `python manage.py seed_demo` for the demo pipeline."
         />
       ) : view === "kanban" ? (
-        <div className="grid gap-[16px] md:grid-cols-3 xl:grid-cols-5 animate-dfIn">
+        <div className="grid gap-[16px] md:grid-cols-3 xl:grid-cols-6 animate-dfIn">
           {PIPELINE_STAGES.map((stage) => {
-            const cards = quotations.filter((q) => q.status === stage.status);
+            const cards = quotations.filter((q) => stage.statuses.includes(q.status));
+            // A "Closed" column standing empty on every healthy board is noise;
+            // a closed quotation with nowhere to appear is a lost record. Show
+            // the column only when it has something in it.
+            if (cards.length === 0 && stage.hideWhenEmpty) return null;
             return (
               <div
-                key={stage.status}
+                key={stage.label}
                 className="rounded-[12px] border border-[#E2E8F0] bg-[#F8FAFC] p-[16px]"
               >
                 <div className="mb-[16px] flex items-center justify-between">

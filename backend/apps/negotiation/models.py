@@ -75,6 +75,67 @@ class NegotiationMessage(TimeStampedModel):
         ordering = ["created_at"]
 
 
+class NegotiationEvent(TimeStampedModel):
+    """Append-only record of ONE move in a negotiation.
+
+    The timeline used to be derived from the current state of each
+    `NegotiationRequest`, which meant a row could only ever show its latest
+    status: once a customer accepted our counter, the "we offered 12%" moment
+    was overwritten by "accepted" and vanished from the history. A negotiation
+    both sides remember differently is worse than no record at all.
+
+    Nothing in here is ever updated or deleted. Every move — a message, an ask,
+    our counter, the decision — is its own row, with who made it and when.
+    Both the rep panel and the customer portal read this same table in order.
+    """
+
+    class Kind(models.TextChoices):
+        MESSAGE = "MESSAGE", "Message"
+        COUNTER_REQUEST = "COUNTER_REQUEST", "Customer counter-offer"
+        REP_COUNTER = "REP_COUNTER", "Our counter-offer"
+        ACCEPTED = "ACCEPTED", "Accepted"
+        REJECTED = "REJECTED", "Declined"
+        SENT = "SENT", "Quotation sent"
+        CONFIRMED = "CONFIRMED", "Confirmed by customer"
+
+    quotation = models.ForeignKey(
+        "quotations.Quotation", on_delete=models.CASCADE, related_name="negotiation_events"
+    )
+    request = models.ForeignKey(
+        "negotiation.NegotiationRequest",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="events",
+    )
+    kind = models.CharField(max_length=20, choices=Kind.choices)
+    author_type = models.CharField(max_length=10)  # CUSTOMER | REP | SYSTEM
+    author = models.ForeignKey(
+        "accounts.User", null=True, blank=True, on_delete=models.SET_NULL, related_name="+"
+    )
+    #: Snapshotted so the thread still reads correctly after a user is
+    #: deactivated or renamed, and so a customer shows as their company rather
+    #: than as "Acme Corp (portal)".
+    author_name = models.CharField(max_length=150, blank=True)
+    body = models.TextField(blank=True)
+    discount_percent = models.DecimalField(**percent(default=None), null=True, blank=True)
+    delivery_date = models.DateField(null=True, blank=True)
+    quotation_line = models.ForeignKey(
+        "quotations.QuotationLine", null=True, blank=True, on_delete=models.SET_NULL, related_name="+"
+    )
+
+    class Meta:
+        db_table = "negotiation_event"
+        # `id` breaks ties: two moves in the same transaction can share a
+        # timestamp to the microsecond, and the thread must still read in the
+        # order things actually happened.
+        ordering = ["created_at", "id"]
+        indexes = [models.Index(fields=["quotation", "created_at"])]
+
+    def __str__(self) -> str:
+        return f"{self.quotation_id} {self.kind} by {self.author_name or 'system'}"
+
+
 class NegotiationRequest(TimeStampedModel):
     """A counter-offer. Accepting one rewrites discounts through the normal
     quotation service, which re-runs the risk engine, which may reopen

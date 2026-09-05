@@ -16,16 +16,19 @@ import { Badge } from "@/components/ui";
 import { date, dateTime, percent } from "@/lib/format";
 import type { TimelineEntry } from "@/types";
 
-const KIND_META: Record<
-  TimelineEntry["kind"],
-  { label: string; tone: string }
-> = {
+const KIND_META: Record<string, { label: string; tone: string }> = {
   MESSAGE: { label: "", tone: "slate" },
   COUNTER_REQUEST: { label: "Counter-offer", tone: "amber" },
   REP_COUNTER: { label: "Our counter-offer", tone: "blue" },
   ACCEPTED: { label: "Accepted", tone: "green" },
   REJECTED: { label: "Declined", tone: "red" },
+  SENT: { label: "Quotation sent", tone: "slate" },
+  CONFIRMED: { label: "Confirmed", tone: "green" },
 };
+
+/** Keyed on a plain string and defaulted, so a kind added on the backend
+ *  renders as a plain entry instead of crashing the whole thread. */
+const UNKNOWN_KIND = { label: "", tone: "slate" };
 
 export function NegotiationThread({
   entries,
@@ -50,7 +53,7 @@ export function NegotiationThread({
     <ol className="space-y-3">
       {entries.map((entry, index) => {
         const mine = entry.author_type === viewpoint;
-        const meta = KIND_META[entry.kind];
+        const meta = KIND_META[entry.kind] ?? UNKNOWN_KIND;
         const who = mine
           ? "You"
           : viewpoint === "CUSTOMER"
