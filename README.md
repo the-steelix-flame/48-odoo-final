@@ -189,7 +189,7 @@ Routing (configurable in screen 18, stored in `approval_rule`):
 |---|---|---|
 | `worst == 0 and order_level == 0` | **NONE** | auto-approved, still audit-logged |
 | otherwise, `score < 60` | **MEDIUM** | Sales Manager |
-| otherwise | **HIGH** | Sales Manager → Finance |
+| otherwise | **HIGH** | Finance |
 
 Two properties this gives us, both demoable:
 
