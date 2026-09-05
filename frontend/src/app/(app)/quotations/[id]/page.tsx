@@ -10,6 +10,7 @@
  */
 
 import { use, useState } from "react";
+import type { KeyboardEvent } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 
@@ -33,11 +34,24 @@ import { RISK_TONE, STATUS_TONE, dateTime, money, percent, titleCase } from "@/l
 import { useApi } from "@/lib/useApi";
 import type { Product, QuotationDetail, UpsellSuggestion } from "@/types";
 
+/**
+ * Enter commits the value by blurring the field, which fires the same onBlur
+ * handler a click-away would. One code path, so typing 17 and pressing Enter
+ * cannot produce a different result from typing 17 and clicking elsewhere.
+ */
+function commitOnEnter(event: KeyboardEvent<HTMLInputElement>) {
+  if (event.key === "Enter") {
+    event.preventDefault();
+    event.currentTarget.blur();
+  }
+}
+
 export default function QuotationBuilderPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const router = useRouter();
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [savedAt, setSavedAt] = useState<string | null>(null);
   const [addProductId, setAddProductId] = useState("");
 
   const { data, error, loading, reload, setData } = useApi<QuotationDetail>(`/quotations/${id}`);
@@ -82,7 +96,33 @@ export default function QuotationBuilderPage({ params }: { params: Promise<{ id:
   const removeLine = (lineId: number) =>
     run(() => del<QuotationDetail>(`/quotations/${id}/lines/${lineId}`));
 
+  /**
+   * Quantity and discount inputs commit on blur or Enter, so a value the user
+   * is still sitting in has not been sent yet. Blurring first makes that PATCH
+   * fire before we act, otherwise clicking straight from a half-typed discount
+   * to Submit would route the quote on the previous number.
+   */
+  function flushPendingEdit() {
+    const active = document.activeElement as HTMLElement | null;
+    if (active && typeof active.blur === "function") active.blur();
+  }
+
+  async function saveDraft() {
+    flushPendingEdit();
+    setBusy(true);
+    setActionError(null);
+    try {
+      setData(await post<QuotationDetail>(`/quotations/${id}/save-draft`));
+      setSavedAt(new Date().toLocaleTimeString());
+    } catch (err) {
+      setActionError(err instanceof ApiError ? err.message : "Could not save the draft");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function submitForApproval() {
+    flushPendingEdit();
     setBusy(true);
     setActionError(null);
     try {
@@ -177,6 +217,7 @@ export default function QuotationBuilderPage({ params }: { params: Promise<{ id:
                         disabled={!editable || busy}
                         className={`${inputClass} w-20`}
                         defaultValue={Number(line.quantity)}
+                        onKeyDown={commitOnEnter}
                         onBlur={(e) =>
                           Number(e.target.value) !== Number(line.quantity) &&
                           updateLine(line.id, { quantity: e.target.value })
@@ -192,6 +233,7 @@ export default function QuotationBuilderPage({ params }: { params: Promise<{ id:
                         disabled={!editable || busy}
                         className={`${inputClass} w-20`}
                         defaultValue={Number(line.discount_percent)}
+                        onKeyDown={commitOnEnter}
                         onBlur={(e) =>
                           Number(e.target.value) !== Number(line.discount_percent) &&
                           updateLine(line.id, { discount_percent: e.target.value })
@@ -307,6 +349,7 @@ export default function QuotationBuilderPage({ params }: { params: Promise<{ id:
                     type="number"
                     className={inputClass}
                     defaultValue={Number(data.order_discount_percent)}
+                    onKeyDown={commitOnEnter}
                     onBlur={(e) =>
                       Number(e.target.value) !== Number(data.order_discount_percent) &&
                       run(() =>
@@ -344,10 +387,20 @@ export default function QuotationBuilderPage({ params }: { params: Promise<{ id:
             </dl>
 
             {editable && (
-              <div className="mt-4 flex flex-wrap gap-2">
-                <Button onClick={submitForApproval} disabled={busy || data.lines.length === 0}>
-                  {data.requires_approval ? "Submit for Approval" : "Submit (auto-approves)"}
-                </Button>
+              <div className="mt-4">
+                <div className="flex flex-wrap gap-2">
+                  <Button onClick={submitForApproval} disabled={busy || data.lines.length === 0}>
+                    {data.requires_approval ? "Submit for Approval" : "Submit (auto-approves)"}
+                  </Button>
+                  <Button variant="secondary" onClick={saveDraft} disabled={busy}>
+                    Save as Draft
+                  </Button>
+                </div>
+                {savedAt && (
+                  <p className="mt-2 text-xs text-emerald-400">
+                    Draft saved at {savedAt} — logged on the audit trail below.
+                  </p>
+                )}
               </div>
             )}
 
@@ -378,23 +431,16 @@ export default function QuotationBuilderPage({ params }: { params: Promise<{ id:
                 >
                   Send to Customer
                 </Button>
-                <Button
-                  variant="success"
-                  disabled={busy}
-                  onClick={async () => {
-                    setBusy(true);
-                    try {
-                      await post(`/quotations/${id}/confirm`);
-                      router.push("/fulfillment");
-                    } catch (err) {
-                      setActionError(err instanceof ApiError ? err.message : "Failed");
-                    } finally {
-                      setBusy(false);
-                    }
-                  }}
-                >
-                  Confirm Order
-                </Button>
+              </div>
+            )}
+
+            {data.status === "SENT" && (
+              <div className="mt-4">
+                <Note>
+                  Sent to the customer. Only the customer can confirm it, from their own portal —
+                  confirming here would skip their sign-off and start fulfilment on terms they had
+                  not yet accepted.
+                </Note>
               </div>
             )}
           </Card>

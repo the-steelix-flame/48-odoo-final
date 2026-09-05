@@ -10,6 +10,7 @@ import {
   Button,
   Card,
   Cell,
+  EmptyState,
   ErrorState,
   Loading,
   Note,
@@ -23,8 +24,15 @@ import { date, money } from "@/lib/format";
 import { useApi } from "@/lib/useApi";
 import type { Allocation, FulfillmentPlan, Role, Warehouse } from "@/types";
 
-/** Mirrors `require_role(FINANCE, SALES_MANAGER)` on the backend; ADMIN is implicit there. */
-const MAY_OVERRIDE: Role[] = ["SALES_MANAGER", "FINANCE", "ADMIN"];
+/**
+ * Mirrors `require_role(FINANCE)` on the backend; ADMIN is implicit there.
+ * Accepting a split is not a read-only act — it moves stock into `reserved`,
+ * making it unavailable to every other open deal — so it carries the same
+ * guard as overriding one. The brief puts warehouse splits and backorder
+ * decisions with the Finance / Operations user.
+ */
+const MAY_MANAGE_FULFILMENT: Role[] = ["FINANCE", "ADMIN"];
+const NEEDS_FINANCE = "Only Finance or Admin can commit stock";
 
 type DraftRow = {
   key: string;
@@ -261,7 +269,7 @@ export default function FulfillmentDetailPage({ params }: { params: Promise<{ id
   const backorders = data.allocations.filter((a) => a.is_backorder);
   const shipping = data.allocations.filter((a) => !a.is_backorder);
   const canAccept = data.status === "SUGGESTED" || data.status === "OVERRIDDEN";
-  const mayOverride = role !== null && MAY_OVERRIDE.includes(role);
+  const mayManage = role !== null && MAY_MANAGE_FULFILMENT.includes(role);
 
   async function run(path: string, fallback: string) {
     setBusy(true);
@@ -322,19 +330,21 @@ export default function FulfillmentDetailPage({ params }: { params: Promise<{ id
         actions={
           canAccept ? (
             <>
-              <Button
-                onClick={() =>
-                  run(`/fulfillment/plans/${id}/accept`, "Could not accept the split")
-                }
-                disabled={busy}
-              >
-                Accept Suggested Split
-              </Button>
-              <span title={mayOverride ? undefined : "Needs Sales Manager, Finance or Admin"}>
+              <span title={mayManage ? undefined : NEEDS_FINANCE}>
+                <Button
+                  onClick={() =>
+                    run(`/fulfillment/plans/${id}/accept`, "Could not accept the split")
+                  }
+                  disabled={busy || !mayManage || data.allocations.length === 0}
+                >
+                  Accept Suggested Split
+                </Button>
+              </span>
+              <span title={mayManage ? undefined : NEEDS_FINANCE}>
                 <Button
                   variant="secondary"
                   onClick={() => setOverriding(true)}
-                  disabled={busy || !mayOverride || !warehouses?.length}
+                  disabled={busy || !mayManage || !warehouses?.length || data.allocations.length === 0}
                 >
                   Manual Override
                 </Button>
@@ -343,6 +353,12 @@ export default function FulfillmentDetailPage({ params }: { params: Promise<{ id
           ) : null
         }
       >
+        {data.allocations.length === 0 ? (
+          <EmptyState
+            title="Nothing on this order needs shipping"
+            hint="Every line is a subscription or service, so there is no physical stock to allocate. Billing still runs on its own schedule."
+          />
+        ) : (
         <Table columns={["Warehouse", "Line", "Qty Fulfilled", "Promised", "Shipped", "Status"]}>
           {[...shipping, ...backorders].map((allocation) => (
             <Row key={allocation.id}>
@@ -361,6 +377,7 @@ export default function FulfillmentDetailPage({ params }: { params: Promise<{ id
             </Row>
           ))}
         </Table>
+        )}
 
         <div className="mt-4 space-y-2">
           {data.consolidation_available && (
@@ -369,11 +386,11 @@ export default function FulfillmentDetailPage({ params }: { params: Promise<{ id
                 Stock has arrived — the remaining backorder can now be filled.
               </p>
               <div className="mt-2">
-                <span title={mayOverride ? undefined : "Needs Sales Manager, Finance or Admin"}>
+                <span title={mayManage ? undefined : NEEDS_FINANCE}>
                   <Button
                     variant="success"
                     className="!px-3 !py-1 text-xs"
-                    disabled={busy || !mayOverride}
+                    disabled={busy || !mayManage}
                     onClick={() =>
                       run(
                         `/fulfillment/plans/${id}/consolidate`,

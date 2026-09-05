@@ -2,7 +2,7 @@
 
 /** Screen 3 — Quotations list / Kanban pipeline.  Owner: the-steelix-flame. */
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 
 import { ApiError, post } from "@/lib/api";
@@ -29,6 +29,16 @@ export default function QuotationsPage() {
   const router = useRouter();
   const [view, setView] = useState<"kanban" | "table">("kanban");
   const [creating, setCreating] = useState(false);
+
+  // The dashboard's "+ New Quotation" links here with ?new=1. Without this the
+  // panel stayed shut and the user had to press New Quotation a second time.
+  // Read on mount rather than with useSearchParams so the page can still be
+  // statically prerendered without a Suspense boundary.
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).get("new") === "1") {
+      setCreating(true);
+    }
+  }, []);
   const [customerId, setCustomerId] = useState<string>("");
   const [createError, setCreateError] = useState<string | null>(null);
 

@@ -63,6 +63,7 @@ class QuotationEventType(models.TextChoices):
     LINE_REMOVED = "LINE_REMOVED", "Line removed"
     DISCOUNT_CHANGED = "DISCOUNT_CHANGED", "Discount changed"
     UPSELL_ADDED = "UPSELL_ADDED", "Upsell added"
+    DRAFT_SAVED = "DRAFT_SAVED", "Draft saved"
     SUBMITTED = "SUBMITTED", "Submitted for approval"
     AUTO_APPROVED = "AUTO_APPROVED", "Auto-approved (within limits)"
     APPROVED = "APPROVED", "Approved"
