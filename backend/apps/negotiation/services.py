@@ -452,10 +452,29 @@ def submit_request(
     # clear it.
     existing = open_request_for(quotation)
     if existing is not None:
-        raise ValidationError(
-            "You already have a request awaiting our response on this quotation.",
-            negotiation_request_id=existing.id,
+        # SUBMITTED means the ball is with us: a second request stacked on an
+        # unanswered one orphans the first at SUBMITTED forever, which is the
+        # bug this guard was written for. Still refused.
+        if existing.status == NegotiationRequestStatus.SUBMITTED:
+            raise ValidationError(
+                "You already have a request awaiting our response on this quotation.",
+                negotiation_request_id=existing.id,
+            )
+        # COUNTERED means the ball is with THEM: we answered, and this new
+        # request is their answer to that answer. Refusing it left the customer
+        # with only two moves after our counter - take it or walk - when the
+        # whole point of a negotiation is that it goes back and forth. The round
+        # we countered is closed as declined (countering back IS declining the
+        # number we named) and a fresh round opens, so the timeline reads as an
+        # ordered exchange rather than one stalled round.
+        existing.status = NegotiationRequestStatus.REJECTED
+        existing.resolved_by = actor
+        existing.resolved_at = timezone.now()
+        existing.resolution_note = (
+            f"Customer countered our {existing.counter_discount_percent}% offer "
+            "with a new request."
         )
+        existing.save()
     if requested_discount_percent is not None and not (
         Decimal("0") <= requested_discount_percent <= Decimal("100")
     ):

@@ -56,6 +56,24 @@ export default function PortalQuotationPage({ params }: { params: Promise<{ id: 
    * UNDER_NEGOTIATION and blocked Accept. At least one field has to say what is
    * being asked for.
    */
+  /**
+   * Accepting our counter-offer and confirming the quotation are different
+   * calls, and there used to be a button for each: the decision card's Accept
+   * and a second Accept inside the offer panel. Two buttons meaning "yes" is
+   * one too many, and the wrong one is worse than useless — confirming while an
+   * offer is outstanding takes the terms as they stand rather than the discount
+   * we just offered, so the customer would click "Accept" and get less than the
+   * number on screen. There is now one Accept, and it accepts whatever is
+   * actually on the table.
+   */
+  async function acceptWhateverIsOnTheTable() {
+    if (counterOffer) {
+      await acceptOffer(counterOffer.id);
+      return;
+    }
+    await confirmQuotation();
+  }
+
   const hasSomethingToAsk =
     counterDiscount.trim() !== "" || deliveryDate.trim() !== "" || message.trim() !== "";
 
@@ -90,6 +108,22 @@ export default function PortalQuotationPage({ params }: { params: Promise<{ id: 
       : null;
   /** Their request is unanswered, so the server will refuse a confirmation. */
   const awaitingOurReply = data.open_request?.status === "SUBMITTED";
+
+  async function acceptOffer(requestId: number) {
+    setBusy(true);
+    setActionError(null);
+    try {
+      setData(
+        await post<PortalQuotation>(
+          `/portal/quotations/${id}/requests/${requestId}/accept`,
+        ),
+      );
+    } catch (err) {
+      setActionError(err instanceof ApiError ? err.message : "Could not accept");
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function submitRequest() {
     setBusy(true);
@@ -281,10 +315,12 @@ export default function PortalQuotationPage({ params }: { params: Promise<{ id: 
           <div className="mt-5 flex flex-wrap items-center gap-2">
             <Button
               variant="success"
-              onClick={confirmQuotation}
+              onClick={acceptWhateverIsOnTheTable}
               disabled={busy || awaitingOurReply}
             >
-              Accept
+              {counterOffer
+                ? `Accept ${percent(counterOffer.counter_discount_percent, 0)}`
+                : "Accept"}
             </Button>
             <span
               title={
@@ -346,8 +382,11 @@ export default function PortalQuotationPage({ params }: { params: Promise<{ id: 
         </Card>
       )}
 
-      {/* ---------------------------------------- our counter-offer */}
-      {counterOffer && (
+      {/* Our counter-offer, stated but not actioned here — the single Accept
+          lives in the decision card above. Gated on `open` as well as on the
+          request, so a confirmed or declined quotation stops advertising an
+          offer that is no longer on the table. */}
+      {open && counterOffer && (
         <div className="mb-6 rounded-xl border border-[#BAE6FD] bg-[#F0F9FF] p-5">
           <h2 className="text-base font-semibold text-[#0C4A6E]">We&apos;ve made you an offer</h2>
           <p className="mt-1 text-sm text-[#0369A1]">
@@ -355,32 +394,11 @@ export default function PortalQuotationPage({ params }: { params: Promise<{ id: 
             <strong>{percent(counterOffer.counter_discount_percent, 0)}</strong>.
             {counterOffer.resolution_note && ` ${counterOffer.resolution_note}`}
           </p>
-          <div className="mt-4 flex flex-wrap gap-2">
-            <Button
-              variant="success"
-              disabled={busy}
-              onClick={async () => {
-                setBusy(true);
-                setActionError(null);
-                try {
-                  setData(
-                    await post<PortalQuotation>(
-                      `/portal/quotations/${id}/requests/${counterOffer.id}/accept`,
-                    ),
-                  );
-                } catch (err) {
-                  setActionError(err instanceof ApiError ? err.message : "Could not accept");
-                } finally {
-                  setBusy(false);
-                }
-              }}
-            >
-              Accept {percent(counterOffer.counter_discount_percent, 0)}
-            </Button>
-            <span className="self-center text-xs text-[#64748B]">
-              …or propose something different below.
-            </span>
-          </div>
+          <p className="mt-3 text-sm text-[#0369A1]">
+            Use <strong>Accept {percent(counterOffer.counter_discount_percent, 0)}</strong> above to
+            take it, or <strong>Negotiate</strong> to come back with another number — countering
+            again replaces this offer.
+          </p>
         </div>
       )}
 

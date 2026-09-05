@@ -13,7 +13,12 @@ from django.test import TestCase
 from apps.accounts import businesses
 from apps.accounts.models import User
 from apps.catalog.models import Product, ProductCategory
-from apps.common.enums import CustomerTier, QuotationStatus, Role
+from apps.common.enums import (
+    CustomerTier,
+    NegotiationRequestStatus,
+    QuotationStatus,
+    Role,
+)
 from apps.common.errors import NotFound, PermissionDenied, ValidationError
 from apps.governance.models import CategoryDiscountCeiling, TierDiscountCeiling
 from apps.negotiation import services as negotiation
@@ -417,20 +422,48 @@ class NegotiationRoundTests(PortalTestBase):
                 quotation, actor=self.buyer, requested_discount_percent=Decimal("20")
             )
 
-    def test_a_second_request_cannot_be_stacked_on_our_open_counter(self):
-        """A COUNTERED round is still open — it is the customer's move, and
-        their move is accept, not 'ask again and orphan the offer'."""
+    def test_a_second_request_cannot_be_stacked_on_an_unanswered_one(self):
+        """SUBMITTED means the ball is with us. Stacking a second request on it
+        orphans the first at SUBMITTED forever, which is what this guard is
+        for. Still refused."""
         quotation = self._sent()
-        request = negotiation.submit_request(
+        negotiation.submit_request(
             quotation, actor=self.buyer, requested_discount_percent=Decimal("25")
-        )
-        negotiation.counter_request(
-            request, actor=self.rep, counter_discount_percent=Decimal("12")
         )
         with self.assertRaises(ValidationError):
             negotiation.submit_request(
                 quotation, actor=self.buyer, requested_discount_percent=Decimal("20")
             )
+
+    def test_the_customer_can_counter_back_and_our_offer_is_not_orphaned(self):
+        """COUNTERED means the ball is with THEM, so a new request is their
+        answer to our answer — a negotiation goes back and forth.
+
+        This replaces a test that refused it outright. The concern behind that
+        was orphaning the offer, and it was the right concern: the fix is to
+        close our round rather than to forbid the reply. Both halves are
+        asserted here, because allowing the reply without settling the old
+        round would reintroduce exactly the bug it was guarding against.
+        """
+        quotation = self._sent()
+        first = negotiation.submit_request(
+            quotation, actor=self.buyer, requested_discount_percent=Decimal("25")
+        )
+        negotiation.counter_request(
+            first, actor=self.rep, counter_discount_percent=Decimal("12")
+        )
+
+        second = negotiation.submit_request(
+            quotation, actor=self.buyer, requested_discount_percent=Decimal("20")
+        )
+
+        first.refresh_from_db()
+        self.assertEqual(first.status, NegotiationRequestStatus.REJECTED)
+        self.assertIsNotNone(first.resolved_at)
+        self.assertIn("12", first.resolution_note)
+        # Exactly one round is open, and it is the new one.
+        self.assertEqual(negotiation.open_request_for(quotation).id, second.id)
+        self.assertEqual(second.requested_discount_percent, Decimal("20"))
 
     def test_submitting_a_request_puts_the_quote_under_negotiation(self):
         quotation = self._sent()
