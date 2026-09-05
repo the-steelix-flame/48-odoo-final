@@ -70,6 +70,88 @@ def issue_one_time_invoice(quotation: Quotation, *, actor=None) -> Invoice | Non
     return invoice
 
 
+#: A confirmed deal moves through these three, in order.
+BILLING_AWAITING = "AWAITING_BILL"
+BILLING_PAYMENT_PENDING = "PAYMENT_PENDING"
+BILLING_PAID = "PAID"
+
+
+def bill_for(quotation) -> Invoice | None:
+    """The bill raised against this deal, if Finance has raised one.
+
+    ONE_TIME only. A recurring invoice belongs to a subscription's own
+    schedule and keeps arriving every period, so treating one as "the bill for
+    the deal" would leave the deal permanently unpaid.
+    """
+    return (
+        Invoice.objects.filter(quotation=quotation, invoice_type=InvoiceType.ONE_TIME)
+        .order_by("id")
+        .first()
+    )
+
+
+def billing_state(quotation) -> tuple[str, Invoice | None]:
+    """Where a confirmed deal stands: awaiting a bill, awaiting payment, paid."""
+    invoice = bill_for(quotation)
+    if invoice is None:
+        return BILLING_AWAITING, None
+    if invoice.status == InvoiceStatus.PAID:
+        return BILLING_PAID, invoice
+    return BILLING_PAYMENT_PENDING, invoice
+
+
+@transaction.atomic
+def raise_bill_for_quotation(quotation, *, actor=None) -> Invoice:
+    """Finance or a Sales Manager signs the deal off, and the bill goes out.
+
+    Confirmation is the customer agreeing to the terms; this is us agreeing to
+    them. Billing before that point means invoicing for a deal nobody internal
+    has accepted, which is why `quotations.confirm()` deliberately leaves the
+    money alone.
+    """
+    from apps.common.enums import QuotationStatus
+
+    if quotation.status != QuotationStatus.CONFIRMED:
+        raise ValidationError(
+            "Only a confirmed deal can be billed — this one is "
+            f"{quotation.get_status_display().lower()}."
+        )
+
+    existing = bill_for(quotation)
+    if existing is not None:
+        # Idempotent on purpose: a double click, or two people accepting the
+        # same deal at once, must not raise two bills for one order.
+        raise ValidationError(
+            f"{quotation.number} has already been billed as {existing.number}.",
+            invoice_id=existing.id,
+        )
+
+    invoice = issue_one_time_invoice(quotation, actor=actor)
+
+    # The recurring lines were deferred at confirm time for the same reason;
+    # release their first period now that the deal is signed off.
+    for subscription in quotation.subscriptions.select_related("plan", "product"):
+        if not subscription.plan.bill_in_advance:
+            continue
+        if subscription.invoices.exists():
+            continue
+        issue_recurring_invoice(
+            subscription,
+            subscription.current_period_start,
+            subscription.current_period_end,
+        )
+
+    if invoice is None:
+        # Subscription-only order: there are no one-time lines to bill, so the
+        # recurring schedule above is the whole of it. Surfaced rather than
+        # returning None, so the caller never has to guess.
+        raise ValidationError(
+            f"{quotation.number} has no one-time lines to bill. Its recurring "
+            "schedule has been released and will invoice each period."
+        )
+    return invoice
+
+
 @transaction.atomic
 def issue_recurring_invoice(subscription, period_start: date, period_end: date) -> Invoice:
     """Bill one subscription period. Called on activation and on renewal."""

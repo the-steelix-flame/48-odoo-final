@@ -759,6 +759,51 @@ export interface NegotiationView {
   requests: PortalRequest[];
 }
 
+/** A line on the bill the customer receives. */
+export interface PortalBillLine {
+  description: string;
+  quantity: string;
+  unit_price: string;
+  line_total: string;
+}
+
+/** The bill. Null until Finance or a Sales Manager accepts the final deal. */
+export interface PortalBill {
+  id: number;
+  number: string;
+  issue_date: string;
+  due_date: string;
+  currency: string;
+  subtotal: string;
+  tax_total: string;
+  total: string;
+  amount_paid: string;
+  amount_due: string;
+  is_paid: boolean;
+  status: InvoiceStatus;
+  /** Who the customer agreed the deal with. */
+  sales_rep: string;
+  lines: PortalBillLine[];
+}
+
+/** Where a confirmed deal stands with billing, on the Finance worklist. */
+export type BillingState = "AWAITING_BILL" | "PAYMENT_PENDING" | "PAID";
+
+export interface DealBillingRow {
+  quotation_id: number;
+  quotation_number: string;
+  customer_name: string;
+  sales_rep: string;
+  closing_amount: string;
+  currency: string;
+  confirmed_at: string;
+  billing_state: BillingState;
+  invoice_id?: number | null;
+  invoice_number?: string | null;
+  invoice_total?: string | null;
+  amount_due?: string | null;
+}
+
 /** The customer's own account. Read-only apart from the password. */
 export interface PortalProfile {
   login_email: string;
@@ -806,6 +851,10 @@ export interface PortalQuotation {
   /** What the rep has taken off, as a share of the pre-discount subtotal. */
   effective_discount_percent: string;
   company_name: string;
+  /** Null until Finance or a Sales Manager accepts the final deal. */
+  bill?: PortalBill | null;
+  /** Only set once the bill is paid; despatch isn't promised before then. */
+  shipping_status?: string | null;
   lines: PortalLine[];
   timeline: TimelineEntry[];
   requests: PortalRequest[];

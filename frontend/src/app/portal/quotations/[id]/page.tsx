@@ -13,6 +13,7 @@ import { use, useState } from "react";
 import Link from "next/link";
 
 import { ApiError, post } from "@/lib/api";
+import { BillPanel } from "@/components/portal/BillPanel";
 import { NegotiationThread } from "@/components/negotiation/Thread";
 import {
   Badge,
@@ -172,6 +173,11 @@ export default function PortalQuotationPage({ params }: { params: Promise<{ id: 
         </div>
       )}
 
+      {/* Billing sits above the quotation itself once it exists: when there is
+          money outstanding, that is the only thing on this page the customer
+          has to act on. */}
+      <BillPanel quotation={data} />
+
       <Card title="Your quotation" className="mb-6">
         <Table columns={["Item", "Qty", "Unit Price", "Discount", "Total"]}>
           {data.lines.map((line) => (
@@ -315,7 +321,13 @@ export default function PortalQuotationPage({ params }: { params: Promise<{ id: 
             </Badge>
             <p className="text-sm text-[#475569]">
               {data.status === "CONFIRMED"
-                ? "This quotation is confirmed and has moved to fulfillment. Nothing further is needed from you."
+                ? // "Nothing further is needed from you" was unconditional, and
+                  // read as a contradiction next to an unpaid bill asking to be
+                  // settled. The billing panel above is the live instruction, so
+                  // this line defers to it.
+                  data.bill && !data.bill.is_paid
+                  ? "This quotation is confirmed. One thing is outstanding: the bill above."
+                  : "This quotation is confirmed and has moved to fulfillment. Nothing further is needed from you."
                 : data.status === "PENDING_APPROVAL"
                   ? "Your terms are with our team for internal review. We'll be in touch as soon as it's cleared."
                   : "This quotation is closed. Contact your account manager if you'd like to reopen it."}

@@ -421,7 +421,12 @@ def submit(quotation: Quotation, *, actor=None) -> Quotation:
 
 @transaction.atomic
 def confirm(quotation: Quotation, *, actor=None) -> dict:
-    """Confirm the order: fulfillment + subscriptions + invoices, in one step.
+    """Confirm the order: fulfillment + subscription records, in one step.
+
+    Deliberately does NOT bill. A confirmed deal still has to be signed off by
+    Finance or a Sales Manager, and raising the paperwork before that means
+    billing a customer for terms nobody internal has accepted yet. The invoice
+    is raised by `billing.raise_bill_for_quotation`.
 
     This is the seam where all three lanes meet, so it lives here and calls
     outward rather than each lane reaching in. Imports are local because
@@ -429,7 +434,6 @@ def confirm(quotation: Quotation, *, actor=None) -> dict:
 
     Returns a summary the API and the demo script can both read.
     """
-    from apps.billing import services as billing
     from apps.fulfillment import services as fulfillment
     from apps.subscriptions import services as subscriptions
 
@@ -464,8 +468,11 @@ def confirm(quotation: Quotation, *, actor=None) -> dict:
     transition(quotation, QuotationStatus.CONFIRMED, actor=actor)
 
     plan = fulfillment.suggest_plan(quotation)
-    created_subscriptions = subscriptions.activate_from_quotation(quotation, actor=actor)
-    invoice = billing.issue_one_time_invoice(quotation, actor=actor)
+    # Subscription records exist from here so the schedule is visible, but the
+    # first invoice waits for the same sign-off as the one-time lines.
+    created_subscriptions = subscriptions.activate_from_quotation(
+        quotation, actor=actor, issue_invoices=False
+    )
 
     record_event(
         quotation,
@@ -473,14 +480,16 @@ def confirm(quotation: Quotation, *, actor=None) -> dict:
         actor=actor,
         fulfillment_plan_id=plan.id,
         subscriptions=len(created_subscriptions),
-        invoice=invoice.number if invoice else None,
     )
     return {
         "confirmed": True,
         "quotation": quotation,
         "fulfillment_plan_id": plan.id,
         "subscription_ids": [s.id for s in created_subscriptions],
-        "invoice_id": invoice.id if invoice else None,
+        # Always None now. Confirming no longer bills — Finance or a Sales
+        # Manager raises the bill afterwards. Kept in the payload so existing
+        # callers keep the same shape rather than a KeyError.
+        "invoice_id": None,
     }
 
 

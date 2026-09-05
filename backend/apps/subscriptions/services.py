@@ -34,7 +34,9 @@ def _period_of(subscription: Subscription) -> Period:
 
 
 @transaction.atomic
-def activate_from_quotation(quotation: Quotation, *, actor=None) -> list[Subscription]:
+def activate_from_quotation(
+    quotation: Quotation, *, actor=None, issue_invoices: bool = True
+) -> list[Subscription]:
     """Turn every RECURRING line on a confirmed order into a subscription.
 
     Each one gets its own billing schedule, separate from the order's one-time
@@ -77,7 +79,10 @@ def activate_from_quotation(quotation: Quotation, *, actor=None) -> list[Subscri
             actor=actor,
             note=f"Created from {quotation.number}",
         )
-        if plan.bill_in_advance:
+        # `issue_invoices=False` is how the confirm path defers the first
+        # period until Finance signs the deal off. Default stays True so
+        # every other caller behaves exactly as before.
+        if issue_invoices and plan.bill_in_advance:
             billing.issue_recurring_invoice(subscription, period.start, period.end)
         created.append(subscription)
 

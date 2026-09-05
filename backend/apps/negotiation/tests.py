@@ -12,8 +12,9 @@ from django.test import TestCase
 
 from apps.accounts import businesses
 from apps.accounts.models import User
+from apps.billing import services as billing
 from apps.catalog.models import Product, ProductCategory
-from apps.common.enums import CustomerTier, QuotationStatus, Role
+from apps.common.enums import CustomerTier, InvoiceType, QuotationStatus, Role
 from apps.common.errors import NotFound, PermissionDenied, ValidationError
 from apps.governance.models import CategoryDiscountCeiling, TierDiscountCeiling
 from apps.negotiation import services as negotiation
@@ -568,6 +569,124 @@ class CustomerRejectionTests(PortalTestBase):
         label, action_required = negotiation.portal_status(QuotationStatus.REJECTED)
         self.assertEqual(label, "Declined")
         self.assertFalse(action_required)
+
+
+class BillingFlowTests(PortalTestBase):
+    """Confirm → Finance accepts → bill → payment → invoice + despatch.
+
+    The order of those steps is the point. Billing used to happen inside
+    `confirm()`, which invoiced the customer for terms nobody internal had
+    signed off; the deal now waits for Finance or a Sales Manager.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.finance = User.objects.create_user(
+            email="finance@t.test", password="x", full_name="Fin", role=Role.FINANCE
+        )
+
+    def _confirmed(self):
+        quotation = self._quotation()
+        quotations.submit(quotation, actor=self.rep)
+        negotiation.send_to_customer(quotation, actor=self.rep)
+        negotiation.confirm_by_customer(quotation, actor=self.buyer)
+        quotation.refresh_from_db()
+        return quotation
+
+    def test_confirming_does_not_bill(self):
+        quotation = self._confirmed()
+
+        self.assertEqual(quotation.status, QuotationStatus.CONFIRMED)
+        self.assertIsNone(billing.bill_for(quotation))
+        state, invoice = billing.billing_state(quotation)
+        self.assertEqual(state, billing.BILLING_AWAITING)
+        self.assertIsNone(invoice)
+        # And the customer is told nothing is owed yet.
+        self.assertIsNone(negotiation.portal_bill(quotation))
+
+    def test_finance_signing_off_raises_the_bill(self):
+        quotation = self._confirmed()
+        invoice = billing.raise_bill_for_quotation(quotation, actor=self.finance)
+
+        self.assertEqual(invoice.invoice_type, InvoiceType.ONE_TIME)
+        state, _ = billing.billing_state(quotation)
+        self.assertEqual(state, billing.BILLING_PAYMENT_PENDING)
+
+    def test_the_bill_carries_the_rep_and_the_closing_amount(self):
+        """What a customer checks a bill against: who they agreed it with, and
+        for how much."""
+        quotation = self._confirmed()
+        billing.raise_bill_for_quotation(quotation, actor=self.finance)
+
+        bill = negotiation.portal_bill(quotation)
+        self.assertEqual(bill["sales_rep"], "Rep")
+        self.assertEqual(bill["total"], quotation.total)
+        self.assertEqual(bill["amount_due"], quotation.total)
+        self.assertFalse(bill["is_paid"])
+        self.assertEqual(len(bill["lines"]), 1)
+
+    def test_a_deal_cannot_be_billed_before_it_is_confirmed(self):
+        quotation = self._quotation()
+        quotations.submit(quotation, actor=self.rep)
+        negotiation.send_to_customer(quotation, actor=self.rep)
+
+        with self.assertRaises(ValidationError):
+            billing.raise_bill_for_quotation(quotation, actor=self.finance)
+
+    def test_billing_twice_is_refused_and_names_the_existing_invoice(self):
+        """Two people accepting the same deal must not raise two bills."""
+        quotation = self._confirmed()
+        first = billing.raise_bill_for_quotation(quotation, actor=self.finance)
+
+        with self.assertRaises(ValidationError) as caught:
+            billing.raise_bill_for_quotation(quotation, actor=self.finance)
+        self.assertEqual(caught.exception.context.get("invoice_id"), first.id)
+
+    def test_despatch_is_not_promised_before_payment(self):
+        quotation = self._confirmed()
+        self.assertIsNone(negotiation.portal_shipping(quotation))
+        billing.raise_bill_for_quotation(quotation, actor=self.finance)
+        self.assertIsNone(negotiation.portal_shipping(quotation))
+
+    def test_paying_settles_the_bill_and_releases_despatch(self):
+        quotation = self._confirmed()
+        billing.raise_bill_for_quotation(quotation, actor=self.finance)
+
+        negotiation.pay_bill(quotation, actor=self.buyer, reference="Card ending 4242")
+
+        state, invoice = billing.billing_state(quotation)
+        self.assertEqual(state, billing.BILLING_PAID)
+        self.assertEqual(invoice.amount_due, Decimal("0.00"))
+        self.assertEqual(invoice.amount_paid, quotation.total)
+
+        bill = negotiation.portal_bill(quotation)
+        self.assertTrue(bill["is_paid"])
+        # The paid bill IS the invoice the customer keeps.
+        self.assertEqual(bill["number"], invoice.number)
+        self.assertIsNotNone(negotiation.portal_shipping(quotation))
+
+    def test_the_payment_records_its_reference(self):
+        quotation = self._confirmed()
+        billing.raise_bill_for_quotation(quotation, actor=self.finance)
+        negotiation.pay_bill(quotation, actor=self.buyer, reference="Card ending 4242")
+
+        payment = billing.bill_for(quotation).payments.get()
+        self.assertEqual(payment.reference, "Card ending 4242")
+        self.assertEqual(payment.method, "CARD")
+
+    def test_paying_twice_is_refused(self):
+        quotation = self._confirmed()
+        billing.raise_bill_for_quotation(quotation, actor=self.finance)
+        negotiation.pay_bill(quotation, actor=self.buyer)
+
+        with self.assertRaises(ValidationError):
+            negotiation.pay_bill(quotation, actor=self.buyer)
+
+    def test_paying_with_no_bill_raised_is_refused(self):
+        """The portal hides the button, but the endpoint is reachable without it."""
+        quotation = self._confirmed()
+        with self.assertRaises(ValidationError):
+            negotiation.pay_bill(quotation, actor=self.buyer)
 
 
 class PortalIsolationTests(PortalTestBase):

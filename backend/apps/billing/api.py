@@ -8,8 +8,9 @@ from ninja import Router, Schema
 from apps.accounts.auth import internal_auth, require_role
 from apps.billing import services
 from apps.billing.models import Invoice
-from apps.common.enums import InvoiceStatus, Role
+from apps.common.enums import InvoiceStatus, QuotationStatus, Role
 from apps.common.errors import NotFound
+from apps.quotations.models import Quotation
 
 router = Router(auth=internal_auth)
 
@@ -111,6 +112,74 @@ def _lifecycle(invoice: Invoice) -> list[dict]:
         {"label": "Invoiced", "done": True},
         {"label": "Paid", "done": invoice.status == InvoiceStatus.PAID},
     ]
+
+
+class DealBillingRowOut(Schema):
+    """A confirmed deal and where it stands with billing.
+
+    Drives the Finance worklist: raise the bill, wait for payment, then open
+    the invoice. One row per deal so the three states read as one lifecycle
+    rather than three unrelated screens.
+    """
+
+    quotation_id: int
+    quotation_number: str
+    customer_name: str
+    #: Point 2 of the brief: whose deal this was.
+    sales_rep: str
+    #: The final closing amount agreed with the customer.
+    closing_amount: Decimal
+    currency: str
+    confirmed_at: datetime
+    billing_state: str  # AWAITING_BILL | PAYMENT_PENDING | PAID
+    invoice_id: int | None = None
+    invoice_number: str | None = None
+    invoice_total: Decimal | None = None
+    amount_due: Decimal | None = None
+
+
+@router.get("/deals", response=list[DealBillingRowOut])
+def list_deals_for_billing(request):
+    """Every confirmed deal, with its billing state."""
+    rows = []
+    quotations = (
+        Quotation.objects.filter(status=QuotationStatus.CONFIRMED)
+        .select_related("customer", "owner_rep")
+        .order_by("-last_activity_at")
+    )
+    for quotation in quotations:
+        state, invoice = services.billing_state(quotation)
+        rows.append(
+            {
+                "quotation_id": quotation.id,
+                "quotation_number": quotation.number,
+                "customer_name": quotation.customer.name,
+                "sales_rep": quotation.owner_rep.full_name or quotation.owner_rep.email,
+                "closing_amount": quotation.total,
+                "currency": quotation.currency,
+                "confirmed_at": quotation.last_activity_at,
+                "billing_state": state,
+                "invoice_id": invoice.id if invoice else None,
+                "invoice_number": invoice.number if invoice else None,
+                "invoice_total": invoice.total if invoice else None,
+                "amount_due": invoice.amount_due if invoice else None,
+            }
+        )
+    return rows
+
+
+@router.post("/quotations/{quotation_id}/bill", response=InvoiceDetailOut)
+def raise_bill(request, quotation_id: int):
+    """Accept the final deal and raise its bill."""
+    require_role(request, Role.FINANCE, Role.SALES_MANAGER)
+    try:
+        quotation = Quotation.objects.select_related("customer", "owner_rep").get(
+            pk=quotation_id
+        )
+    except Quotation.DoesNotExist:
+        raise NotFound("Quotation not found")
+    invoice = services.raise_bill_for_quotation(quotation, actor=request.auth)
+    return get_invoice(request, invoice.id)
 
 
 @router.get("/invoices", response=list[InvoiceRowOut])

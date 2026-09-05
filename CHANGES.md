@@ -1103,6 +1103,75 @@ which is correct: there is nothing in-app behind you.
 
 ---
 
+### Billing: the deal is not billed until someone internal accepts it
+
+The negotiation workflow is untouched. What changed is what happens *after* it —
+previously nothing, or rather too much: `quotations.confirm()` issued the one-time
+invoice itself. Confirming is the **customer** agreeing to the terms; it is not us
+agreeing to them. Billing at that moment invoices a customer for a deal nobody on
+our side has signed off, and re-confirming during a negotiation would have raised
+paperwork repeatedly for terms still in flight.
+
+So the deal now stops at CONFIRMED and waits. Finance or a Sales Manager accepts
+it, and *that* raises the bill.
+
+**The lifecycle**, one deal, three states, named once in `billing/services.py` and
+rendered from that same source on both sides:
+
+| State | Finance sees | The customer sees |
+|---|---|---|
+| `AWAITING_BILL` | **Accept deal & generate bill** | "Your bill will appear here as soon as our team has finalised it" |
+| `PAYMENT_PENDING` | **Payment Pending** + the amount outstanding | "Your bill has been generated" → **Make the payment →** |
+| `PAID` | **View Invoice** | Despatch status, then the invoice itself |
+
+| File | Change |
+|---|---|
+| `apps/quotations/services.py` | `confirm()` no longer bills. It still plans fulfillment and creates the subscription records — the schedule should be visible — but passes `issue_invoices=False`. Returns `invoice_id: None` rather than dropping the key, so existing callers keep their shape. |
+| `apps/subscriptions/services.py` | `activate_from_quotation(..., issue_invoices=True)`. The opt-out defers a subscription's *first* period to the same sign-off as the one-time lines. Default unchanged, so every other caller behaves exactly as before. |
+| `apps/billing/services.py` | `bill_for()`, `billing_state()`, `raise_bill_for_quotation()`. |
+| `apps/billing/api.py` | `GET /billing/deals`, `POST /billing/quotations/{id}/bill` (FINANCE or SALES_MANAGER). |
+| `apps/negotiation/services.py` | `portal_bill()`, `portal_shipping()`, `pay_bill()`. |
+| `apps/negotiation/api.py` | `bill` and `shipping_status` on `PortalQuotationOut`; `POST /portal/quotations/{id}/pay`. |
+| `app/(app)/invoices/page.tsx` | The **Confirmed deals** worklist above the invoice list. |
+| `components/portal/BillPanel.tsx` | **New.** The customer's three states. |
+| `app/portal/quotations/[id]/pay/page.tsx` | **New.** Card checkout. |
+
+**Three decisions worth knowing.**
+
+`bill_for()` looks only at `ONE_TIME` invoices. A recurring invoice belongs to a
+subscription's own schedule and keeps arriving every period, so treating one as
+"the bill for the deal" would leave the deal permanently unpaid — the Finance row
+would never leave Payment Pending.
+
+Raising a bill twice is refused, and the refusal carries the existing `invoice_id`.
+Two people accepting the same deal at once is not hypothetical on a shared worklist,
+and two invoices for one order is a much more expensive mistake than a rejected
+second click.
+
+`portal_shipping()` returns `None` until the bill is paid. Promising despatch on an
+unpaid order is a claim we have not earned; once paid it names the warehouses the
+fulfillment plan actually allocated from.
+
+**Edge cases the frontend handles rather than discovers.** Checkout opened with no
+bill raised, or with one already settled, says which of the two it is instead of
+showing a form that would fail on submit. A part-settled bill asks for the balance,
+not the total again. Roles that cannot bill see "Awaiting Finance sign-off" rather
+than a button that 403s — the same "UI offers what the API refuses" pattern fixed
+earlier on settings, admin and the portal. And the confirmed-status line, which
+unconditionally read "Nothing further is needed from you", now defers to the bill
+above it when there is money outstanding; it was a direct contradiction.
+
+Verified: 11 new tests in `apps/negotiation/tests.py` (`BillingFlowTests`) walk
+confirm → sign-off → payment → invoice, and pin the refusals — billing before
+confirmation, billing twice, paying twice, paying with no bill raised. 127 backend
+tests pass. Every real row in the dev database was also serialised through the new
+schemas, which is where the pydantic-v2 coercion bugs have surfaced before: Q-1004
+sits in `PAYMENT_PENDING`, Q-1002 in `PAID` with despatch from Main Warehouse.
+
+No migration. It reuses the existing `Invoice`, `InvoiceLine` and `Payment` models.
+
+---
+
 ## 7. Migrations added by this lane
 
 Anyone pulling this must run `python manage.py migrate`:

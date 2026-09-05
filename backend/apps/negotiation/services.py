@@ -79,6 +79,104 @@ def assert_portal_user(user):
     return profile
 
 
+def portal_bill(quotation) -> dict | None:
+    """The bill for this deal, as the customer sees it.
+
+    None until Finance signs the deal off. Deliberately carries the sales rep
+    and the closing amount, because "who did I agree this with, and for how
+    much" is what a customer checks a bill against.
+    """
+    from apps.billing import services as billing
+
+    invoice = billing.bill_for(quotation)
+    if invoice is None:
+        return None
+    return {
+        "id": invoice.id,
+        "number": invoice.number,
+        "issue_date": invoice.issue_date,
+        "due_date": invoice.due_date,
+        "currency": invoice.currency,
+        "subtotal": invoice.subtotal,
+        "tax_total": invoice.tax_total,
+        "total": invoice.total,
+        "amount_paid": invoice.amount_paid,
+        "amount_due": invoice.amount_due,
+        "is_paid": invoice.status == "PAID",
+        "status": invoice.status,
+        "sales_rep": (
+            quotation.owner_rep.full_name or quotation.owner_rep.email
+            if quotation.owner_rep_id
+            else "Your account manager"
+        ),
+        "lines": [
+            {
+                "description": line.description,
+                "quantity": line.quantity,
+                "unit_price": line.unit_price,
+                "line_total": line.line_total,
+            }
+            for line in invoice.lines.all()
+        ],
+    }
+
+
+def portal_shipping(quotation) -> str | None:
+    """What the customer is told about despatch, once they have paid.
+
+    Nothing before payment: promising despatch on an unpaid order would be a
+    claim we have not earned.
+    """
+    from apps.billing import services as billing
+
+    state, _ = billing.billing_state(quotation)
+    if state != billing.BILLING_PAID:
+        return None
+
+    plan = quotation.fulfillment_plans.order_by("-created_at").first()
+    if plan is None:
+        return "Your order is being prepared for despatch."
+
+    warehouses = sorted(
+        {
+            allocation.warehouse.name
+            for allocation in plan.allocations.select_related("warehouse")
+            if not allocation.is_backorder
+        }
+    )
+    if not warehouses:
+        return "Your order is being prepared for despatch."
+    if len(warehouses) == 1:
+        return f"Your order is being prepared for despatch from {warehouses[0]}."
+    return (
+        "Your order is being prepared for despatch from "
+        + ", ".join(warehouses[:-1])
+        + f" and {warehouses[-1]}."
+    )
+
+
+@transaction.atomic
+def pay_bill(quotation, *, actor, reference: str = "") -> None:
+    """The customer settles their bill in full from the portal."""
+    from apps.billing import services as billing
+
+    invoice = billing.bill_for(quotation)
+    if invoice is None:
+        raise ValidationError("There is no bill to pay on this order yet.")
+    if invoice.status == "PAID":
+        raise ValidationError("This bill has already been paid.")
+    if invoice.amount_due <= 0:
+        raise ValidationError("There is nothing outstanding on this bill.")
+
+    billing.record_payment(
+        invoice,
+        amount=invoice.amount_due,
+        method="CARD",
+        reference=reference,
+        actor=actor,
+    )
+
+
 def portal_profile(user) -> dict:
     """The customer's own account.
 

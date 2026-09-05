@@ -80,6 +80,36 @@ class PortalRequestOut(Schema):
         return obj.quotation.customer.name
 
 
+class PortalBillLineOut(Schema):
+    description: str
+    quantity: Decimal
+    unit_price: Decimal
+    line_total: Decimal
+
+
+class PortalBillOut(Schema):
+    """The bill, as the customer sees it. Null until Finance signs off."""
+
+    id: int
+    number: str
+    issue_date: date
+    due_date: date
+    currency: str
+    subtotal: Decimal
+    tax_total: Decimal
+    total: Decimal
+    amount_paid: Decimal
+    amount_due: Decimal
+    is_paid: bool
+    status: str
+    sales_rep: str
+    lines: list[PortalBillLineOut]
+
+
+class PayIn(Schema):
+    reference: str = ""
+
+
 class PortalQuotationRowOut(Schema):
     """One row of the customer's quotation list. Deliberately thin."""
 
@@ -114,6 +144,10 @@ class PortalQuotationOut(Schema):
     #: Computed here so the portal renders a number rather than deriving one.
     effective_discount_percent: Decimal
     company_name: str
+    #: Null until Finance or a Sales Manager accepts the final deal.
+    bill: PortalBillOut | None = None
+    #: Only set once the bill is paid; despatch is not promised before then.
+    shipping_status: str | None = None
     lines: list[PortalLineOut]
     timeline: list[TimelineEntryOut]
     requests: list[PortalRequestOut]
@@ -231,6 +265,8 @@ def _portal_payload(quotation: Quotation) -> dict:
         "valid_until": quotation.valid_until,
         "effective_discount_percent": _effective_discount(quotation),
         "company_name": quotation.customer.name,
+        "bill": services.portal_bill(quotation),
+        "shipping_status": services.portal_shipping(quotation),
         "lines": list(quotation.lines.all()),
         "timeline": services.negotiation_timeline(quotation),
         "requests": list(quotation.negotiation_requests.all()),
@@ -352,6 +388,15 @@ def portal_reject(request, quotation_id: int, payload: ResolveIn):
     """
     quotation = services.authorise_portal_access(request.auth, quotation_id)
     services.reject_by_customer(quotation, actor=request.auth, note=payload.note)
+    quotation.refresh_from_db()
+    return _portal_payload(quotation)
+
+
+@router.post("/quotations/{quotation_id}/pay", response=PortalQuotationOut, auth=any_auth)
+def portal_pay(request, quotation_id: int, payload: PayIn):
+    """Settle the bill in full."""
+    quotation = services.authorise_portal_access(request.auth, quotation_id)
+    services.pay_bill(quotation, actor=request.auth, reference=payload.reference)
     quotation.refresh_from_db()
     return _portal_payload(quotation)
 
