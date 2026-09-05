@@ -236,7 +236,7 @@ export default function QuotationBuilderPage({ params }: { params: Promise<{ id:
               >
                 {data.lines.map((line) => (
                   <Row key={line.id}>
-                    <Cell className="font-medium text-slate-100">
+                    <Cell className="font-medium text-[#0F172A]">
                       {line.description}
                       <span className="ml-2 text-xs text-slate-500">{line.category_name}</span>
                     </Cell>
@@ -291,7 +291,7 @@ export default function QuotationBuilderPage({ params }: { params: Promise<{ id:
                         }}
                       />
                     </Cell>
-                    <Cell className="text-slate-400">
+                    <Cell className="text-[#64748B]">
                       {percent(line.allowed_discount_percent, 0)}
                     </Cell>
                     <Cell>
@@ -303,7 +303,7 @@ export default function QuotationBuilderPage({ params }: { params: Promise<{ id:
                         <Badge tone="green">OK</Badge>
                       )}
                     </Cell>
-                    <Cell className="font-medium text-slate-100">
+                    <Cell className="font-medium text-[#0F172A]">
                       {money(line.line_total, data.currency)}
                     </Cell>
                     <Cell>
@@ -311,7 +311,7 @@ export default function QuotationBuilderPage({ params }: { params: Promise<{ id:
                         <button
                           onClick={() => removeLine(line.id)}
                           disabled={busy}
-                          className="text-xs text-rose-400 hover:text-rose-300"
+                          className="text-xs text-rose-600 hover:text-rose-700"
                         >
                           Remove
                         </button>
@@ -341,8 +341,8 @@ export default function QuotationBuilderPage({ params }: { params: Promise<{ id:
                   <Row key={event.id}>
                     <Cell>{event.actor_name}</Cell>
                     <Cell>{titleCase(event.event_type)}</Cell>
-                    <Cell className="text-slate-400">{dateTime(event.created_at)}</Cell>
-                    <Cell className="text-slate-400">{event.note || "—"}</Cell>
+                    <Cell className="text-[#64748B]">{dateTime(event.created_at)}</Cell>
+                    <Cell className="text-[#64748B]">{event.note || "—"}</Cell>
                   </Row>
                 ))}
               </Table>
@@ -360,24 +360,24 @@ export default function QuotationBuilderPage({ params }: { params: Promise<{ id:
                 ["Tax", money(data.tax_total, data.currency)],
               ].map(([label, value]) => (
                 <div key={label} className="flex justify-between">
-                  <dt className="text-slate-400">{label}</dt>
-                  <dd className="text-slate-200">{value}</dd>
+                  <dt className="text-[#64748B]">{label}</dt>
+                  <dd className="text-[#334155]">{value}</dd>
                 </div>
               ))}
               <div className="flex justify-between border-t border-edge pt-2 text-base font-semibold">
-                <dt className="text-slate-300">Total</dt>
-                <dd className="text-slate-100">{money(data.total, data.currency)}</dd>
+                <dt className="text-[#475569]">Total</dt>
+                <dd className="text-[#0F172A]">{money(data.total, data.currency)}</dd>
               </div>
             </dl>
 
             <div className="mt-4">
               <p className="mb-1.5 flex justify-between text-xs">
-                <span className="text-slate-400">Live margin</span>
-                <span className="text-slate-200">
+                <span className="text-[#64748B]">Live margin</span>
+                <span className="text-[#334155]">
                   {percent(data.margin_percent)} · {money(data.margin_amount, data.currency)}
                 </span>
               </p>
-              <div className="h-2 overflow-hidden rounded-full bg-black/40">
+              <div className="h-2 overflow-hidden rounded-full bg-[#E2E8F0]">
                 <div
                   className={`h-full transition-all ${
                     Number(data.margin_percent) < 15
@@ -418,10 +418,10 @@ export default function QuotationBuilderPage({ params }: { params: Promise<{ id:
           {/* ------------------------------------------- risk */}
           <Card title="Approval routing" subtitle="Computed, not requested">
             <div className="mb-3 flex items-center justify-between">
-              <span className="text-sm text-slate-400">Blended risk score</span>
+              <span className="text-sm text-[#64748B]">Blended risk score</span>
               <Badge tone={RISK_TONE[data.risk_band]}>{data.risk.score}</Badge>
             </div>
-            <p className="text-sm text-slate-300">{data.risk.explanation}</p>
+            <p className="text-sm text-[#475569]">{data.risk.explanation}</p>
             <dl className="mt-3 space-y-1 text-xs text-slate-500">
               <div className="flex justify-between">
                 <dt>Worst line excess</dt>
@@ -448,7 +448,7 @@ export default function QuotationBuilderPage({ params }: { params: Promise<{ id:
                   </Button>
                 </div>
                 {savedAt && (
-                  <p className="mt-2 text-xs text-emerald-400">
+                  <p className="mt-2 text-xs text-emerald-600">
                     Draft saved at {savedAt} — logged on the audit trail below.
                   </p>
                 )}
@@ -511,14 +511,14 @@ export default function QuotationBuilderPage({ params }: { params: Promise<{ id:
                 {upsells.map((suggestion) => (
                   <li
                     key={suggestion.product_id}
-                    className="rounded-lg border border-edge bg-black/20 p-3"
+                    className="rounded-lg border border-edge bg-[#F8FAFC] p-3"
                   >
                     <div className="flex items-start justify-between gap-3">
                       <div>
-                        <p className="text-sm font-medium text-slate-100">
+                        <p className="text-sm font-medium text-[#0F172A]">
                           {suggestion.product_name}
                         </p>
-                        <p className="mt-0.5 text-xs text-emerald-400">
+                        <p className="mt-0.5 text-xs text-emerald-600">
                           Margin +{money(suggestion.margin_delta)}
                         </p>
                       </div>

@@ -98,7 +98,7 @@ export default function BillingDetailPage({ params }: { params: Promise<{ id: st
               <Table columns={["Product", "Qty", "Amount"]}>
                 {data.one_time_lines.map((line, index) => (
                   <Row key={index}>
-                    <Cell className="font-medium text-slate-100">{line.description}</Cell>
+                    <Cell className="font-medium text-[#0F172A]">{line.description}</Cell>
                     <Cell>{Number(line.quantity)}</Cell>
                     <Cell>{money(line.line_total)}</Cell>
                   </Row>
@@ -113,7 +113,7 @@ export default function BillingDetailPage({ params }: { params: Promise<{ id: st
           >
             <Table columns={["Plan", "Cycle", "Next Bill Date", "Amount"]}>
               <Row>
-                <Cell className="font-medium text-slate-100">{data.plan_name}</Cell>
+                <Cell className="font-medium text-[#0F172A]">{data.plan_name}</Cell>
                 <Cell>{titleCase(data.interval)}</Cell>
                 <Cell>{date(data.next_bill_date)}</Cell>
                 <Cell>{money(data.period_amount)}</Cell>
@@ -146,10 +146,10 @@ export default function BillingDetailPage({ params }: { params: Promise<{ id: st
               <Table columns={["Event", "Effective", "Change", "Proration", "Document"]}>
                 {data.events.map((event) => (
                   <Row key={event.id}>
-                    <Cell className="font-medium text-slate-100">
+                    <Cell className="font-medium text-[#0F172A]">
                       {titleCase(event.event_type)}
                     </Cell>
-                    <Cell className="text-slate-400">{date(event.effective_date)}</Cell>
+                    <Cell className="text-[#64748B]">{date(event.effective_date)}</Cell>
                     <Cell>
                       {event.old_quantity != null && event.new_quantity != null
                         ? `${Number(event.old_quantity)} → ${Number(event.new_quantity)}`
@@ -158,15 +158,15 @@ export default function BillingDetailPage({ params }: { params: Promise<{ id: st
                     <Cell
                       className={
                         Number(event.proration_amount) < 0
-                          ? "text-emerald-400"
+                          ? "text-emerald-600"
                           : Number(event.proration_amount) > 0
-                            ? "text-amber-300"
+                            ? "text-amber-700"
                             : "text-slate-500"
                       }
                     >
                       {money(event.proration_amount)}
                     </Cell>
-                    <Cell className="text-slate-400">
+                    <Cell className="text-[#64748B]">
                       {event.invoice_id
                         ? `Invoice #${event.invoice_id}`
                         : event.credit_note_id

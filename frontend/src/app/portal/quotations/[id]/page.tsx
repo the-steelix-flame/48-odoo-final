@@ -131,7 +131,7 @@ export default function PortalQuotationPage({ params }: { params: Promise<{ id: 
         </div>
       )}
       {confirmNotice && (
-        <div className="mb-4 rounded-lg border border-emerald-800 bg-emerald-950/30 px-4 py-3 text-sm text-emerald-300">
+        <div className="mb-4 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
           {confirmNotice}
         </div>
       )}
@@ -140,7 +140,7 @@ export default function PortalQuotationPage({ params }: { params: Promise<{ id: 
         <Table columns={["Item", "Qty", "Unit Price", "Discount", "Total"]}>
           {data.lines.map((line) => (
             <Row key={line.id}>
-              <Cell className="font-medium text-slate-100">{line.description}</Cell>
+              <Cell className="font-medium text-[#0F172A]">{line.description}</Cell>
               <Cell>{Number(line.quantity)}</Cell>
               <Cell>{money(line.unit_price, data.currency)}</Cell>
               <Cell>{percent(line.discount_percent, 0)}</Cell>
@@ -156,27 +156,27 @@ export default function PortalQuotationPage({ params }: { params: Promise<{ id: 
             ["Tax", money(data.tax_total, data.currency)],
           ].map(([label, value]) => (
             <div key={label} className="flex justify-between">
-              <dt className="text-slate-400">{label}</dt>
-              <dd className="text-slate-200">{value}</dd>
+              <dt className="text-[#64748B]">{label}</dt>
+              <dd className="text-[#334155]">{value}</dd>
             </div>
           ))}
           <div className="flex justify-between border-t border-edge pt-2 text-base font-semibold">
-            <dt className="text-slate-300">Total</dt>
-            <dd className="text-slate-100">{money(data.total, data.currency)}</dd>
+            <dt className="text-[#475569]">Total</dt>
+            <dd className="text-[#0F172A]">{money(data.total, data.currency)}</dd>
           </div>
         </dl>
       </Card>
 
       {open && (
         <Card title="Request a change" className="mb-6">
-          <p className="mb-4 text-sm text-slate-400">
+          <p className="mb-4 text-sm text-[#64748B]">
             Ask a question on any line, or propose different terms. No email needed.
           </p>
 
           <div className="space-y-3">
             {data.lines.map((line) => (
               <div key={line.id} className="grid gap-2 sm:grid-cols-[200px_1fr] sm:items-center">
-                <span className="text-sm text-slate-300">{line.description}</span>
+                <span className="text-sm text-[#475569]">{line.description}</span>
                 <input
                   className={inputClass}
                   placeholder="Add a comment about this line…"
@@ -246,7 +246,7 @@ export default function PortalQuotationPage({ params }: { params: Promise<{ id: 
           <Table columns={["Requested", "Discount", "Delivery", "Status", "Response"]}>
             {data.requests.map((request) => (
               <Row key={request.id}>
-                <Cell className="text-slate-400">{dateTime(request.created_at)}</Cell>
+                <Cell className="text-[#64748B]">{dateTime(request.created_at)}</Cell>
                 <Cell>
                   {request.requested_discount_percent
                     ? percent(request.requested_discount_percent, 0)
@@ -266,7 +266,7 @@ export default function PortalQuotationPage({ params }: { params: Promise<{ id: 
                     {titleCase(request.status)}
                   </Badge>
                 </Cell>
-                <Cell className="text-slate-400">{request.resolution_note || "—"}</Cell>
+                <Cell className="text-[#64748B]">{request.resolution_note || "—"}</Cell>
               </Row>
             ))}
           </Table>
@@ -280,17 +280,17 @@ export default function PortalQuotationPage({ params }: { params: Promise<{ id: 
               <li
                 key={msg.id}
                 className={`rounded-lg border border-edge p-3 ${
-                  msg.author_type === "CUSTOMER" ? "bg-black/20" : "bg-blue-950/20"
+                  msg.author_type === "CUSTOMER" ? "bg-[#F8FAFC]" : "bg-blue-950/20"
                 }`}
               >
                 <div className="flex items-center justify-between gap-3">
-                  <span className="text-xs font-medium text-slate-400">
+                  <span className="text-xs font-medium text-[#64748B]">
                     {msg.author_type === "CUSTOMER" ? "You" : "Your account manager"}
                     {msg.line_description && ` · ${msg.line_description}`}
                   </span>
                   <span className="text-xs text-slate-500">{dateTime(msg.created_at)}</span>
                 </div>
-                <p className="mt-1.5 text-sm text-slate-200">{msg.body}</p>
+                <p className="mt-1.5 text-sm text-[#334155]">{msg.body}</p>
               </li>
             ))}
           </ul>

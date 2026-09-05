@@ -105,7 +105,7 @@ export default function QuotationsPage() {
                 Create
               </Button>
             </div>
-            {createError && <p className="mt-3 text-sm text-rose-300">{createError}</p>}
+            {createError && <p className="mt-3 text-sm text-rose-700">{createError}</p>}
           </Card>
         </div>
       )}

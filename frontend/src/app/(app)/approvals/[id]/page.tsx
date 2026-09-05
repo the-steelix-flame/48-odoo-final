@@ -80,7 +80,7 @@ export default function ApprovalDetailPage({ params }: { params: Promise<{ id: s
             <Badge tone="blue">Customer Tier: {data.customer_tier}</Badge>
             <Link
               href={`/quotations/${data.quotation_id}`}
-              className="rounded-lg border border-edge px-4 py-2 text-sm text-slate-200 hover:bg-surface"
+              className="rounded-lg border border-edge px-4 py-2 text-sm text-[#334155] hover:bg-surface"
             >
               Open quotation
             </Link>
@@ -100,10 +100,10 @@ export default function ApprovalDetailPage({ params }: { params: Promise<{ id: s
             <Table columns={["Line", "Discount Given", "Limit Allowed", "Weight", "Over By"]}>
               {data.risk.lines.map((line, index) => (
                 <Row key={line.line_id ?? index}>
-                  <Cell className="font-medium text-slate-100">{line.label}</Cell>
+                  <Cell className="font-medium text-[#0F172A]">{line.label}</Cell>
                   <Cell>{percent(line.discount_percent, 0)}</Cell>
                   <Cell>{percent(line.allowed_percent, 0)}</Cell>
-                  <Cell className="text-slate-400">
+                  <Cell className="text-[#64748B]">
                     {(Number(line.weight) * 100).toFixed(0)}% of order
                   </Cell>
                   <Cell>
@@ -128,9 +128,9 @@ export default function ApprovalDetailPage({ params }: { params: Promise<{ id: s
                 ["Blended", `${data.risk.blended_excess} pt`],
                 ["Order-level", `${data.risk.order_level_excess} pt`],
               ].map(([label, value]) => (
-                <div key={label} className="rounded-lg border border-edge bg-black/20 px-3 py-2">
+                <div key={label} className="rounded-lg border border-edge bg-[#F8FAFC] px-3 py-2">
                   <dt className="text-xs uppercase tracking-wide text-slate-500">{label}</dt>
-                  <dd className="mt-0.5 text-slate-200">{value}</dd>
+                  <dd className="mt-0.5 text-[#334155]">{value}</dd>
                 </div>
               ))}
             </dl>
@@ -142,8 +142,8 @@ export default function ApprovalDetailPage({ params }: { params: Promise<{ id: s
                 <Row key={event.id}>
                   <Cell>{event.actor_name}</Cell>
                   <Cell>{titleCase(event.event_type)}</Cell>
-                  <Cell className="text-slate-400">{dateTime(event.created_at)}</Cell>
-                  <Cell className="text-slate-400">{event.note || "—"}</Cell>
+                  <Cell className="text-[#64748B]">{dateTime(event.created_at)}</Cell>
+                  <Cell className="text-[#64748B]">{event.note || "—"}</Cell>
                 </Row>
               ))}
             </Table>
@@ -167,7 +167,7 @@ export default function ApprovalDetailPage({ params }: { params: Promise<{ id: s
                     }`}
                   />
                   <div className="min-w-0 flex-1">
-                    <p className="text-sm text-slate-100">
+                    <p className="text-sm text-[#0F172A]">
                       {step.sequence}. {titleCase(step.role_required)}
                     </p>
                     <p className="text-xs text-slate-500">
@@ -175,7 +175,7 @@ export default function ApprovalDetailPage({ params }: { params: Promise<{ id: s
                       {step.acted_at && ` · ${dateTime(step.acted_at)}`}
                     </p>
                     {step.decision_note && (
-                      <p className="mt-1 text-xs text-slate-400">&ldquo;{step.decision_note}&rdquo;</p>
+                      <p className="mt-1 text-xs text-[#64748B]">&ldquo;{step.decision_note}&rdquo;</p>
                     )}
                   </div>
                   <Badge tone={STEP_TONE[step.status]}>{titleCase(step.status)}</Badge>
@@ -212,7 +212,7 @@ export default function ApprovalDetailPage({ params }: { params: Promise<{ id: s
             </Card>
           ) : (
             <Card title="Closed">
-              <p className="text-sm text-slate-300">
+              <p className="text-sm text-[#475569]">
                 This request was <strong>{titleCase(data.status)}</strong>. A later change to the
                 quotation opens a new request rather than reopening this one, so the history stays
                 readable.
