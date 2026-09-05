@@ -551,6 +551,11 @@ export interface DealAlert {
   message: string;
   status: string;
   detected_at: string;
+  /** Where the deal actually sits, so the row can show its stage. */
+  quotation_status: QuotationStatus;
+  risk_band: RiskBand;
+  /** The approval to open, when the quote has one. */
+  approval_request_id?: number | null;
 }
 
 export interface DealHealth {

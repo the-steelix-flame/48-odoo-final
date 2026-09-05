@@ -2,13 +2,10 @@
 
 /** Screen 14 — Deal health & anomaly dashboard.  Owner: anubhaw0raj. */
 
-import { useState } from "react";
-import { useRouter } from "next/navigation";
+import Link from "next/link";
 
-import { ApiError, post } from "@/lib/api";
 import {
   Badge,
-  Button,
   Card,
   Cell,
   EmptyState,
@@ -20,35 +17,88 @@ import {
   StatCard,
   Table,
 } from "@/components/ui";
+import { useAuth } from "@/lib/auth";
 import { dateTime, titleCase } from "@/lib/format";
 import { useApi } from "@/lib/useApi";
-import type { DealHealth } from "@/types";
+import type { DealHealth, QuotationStatus, Role } from "@/types";
 
 const SEVERITY_TONE: Record<string, string> = { LOW: "slate", MEDIUM: "amber", HIGH: "red" };
 
-export default function DealHealthPage() {
-  const router = useRouter();
-  const [busy, setBusy] = useState(false);
-  const [actionError, setActionError] = useState<string | null>(null);
+/** Mirrors the approval chain: only these roles ever decide a flagged quote. */
+const MAY_DECIDE: Role[] = ["SALES_MANAGER", "FINANCE", "ADMIN"];
 
+/**
+ * The four stages a deal passes through, as stored on `Quotation.status`.
+ *
+ * SENT and UNDER_NEGOTIATION both sit at the Approved stage — the quote has
+ * cleared its approvals and is with the customer. They are not separate steps
+ * on this track, but the label below still shows the real status so a manager
+ * can tell "waiting on the customer" from "customer is arguing".
+ */
+const STAGES = ["Draft", "Pending", "Approved", "Confirmed"] as const;
+
+function stageIndex(status: QuotationStatus): number {
+  switch (status) {
+    case "DRAFT":
+      return 0;
+    case "PENDING_APPROVAL":
+      return 1;
+    case "APPROVED":
+    case "SENT":
+    case "UNDER_NEGOTIATION":
+      return 2;
+    case "CONFIRMED":
+      return 3;
+    default:
+      return -1; // REJECTED / CANCELLED never reach the track
+  }
+}
+
+function StageTrack({ status }: { status: QuotationStatus }) {
+  const active = stageIndex(status);
+
+  // A dead deal has no progress to show; saying so beats a track of grey dots.
+  if (active === -1) {
+    return <Badge tone="red">{titleCase(status)}</Badge>;
+  }
+
+  return (
+    <div className="flex items-center gap-[6px]" title={titleCase(status)}>
+      <div className="flex items-center">
+        {STAGES.map((stage, index) => (
+          <div key={stage} className="flex items-center">
+            {index > 0 && (
+              <span
+                className={`block h-[2px] w-[13px] ${
+                  index <= active ? "bg-[#0891B2]" : "bg-[#E2E8F0]"
+                }`}
+              />
+            )}
+            {index < active ? (
+              <span className="block h-[8px] w-[8px] rounded-full bg-[#0891B2]" />
+            ) : index === active ? (
+              // the live stage pulses, using the shell's own keyframe
+              <span className="block h-[9px] w-[9px] animate-dfPulse rounded-full bg-[#0891B2] ring-[3px] ring-[#0891B2]/25" />
+            ) : (
+              <span className="block h-[8px] w-[8px] rounded-full bg-[#E2E8F0]" />
+            )}
+          </div>
+        ))}
+      </div>
+      <span className="text-[11px] whitespace-nowrap text-[#64748B]">{titleCase(status)}</span>
+    </div>
+  );
+}
+
+export default function DealHealthPage() {
+  const { role } = useAuth();
   const { data, error, loading, reload } = useApi<DealHealth>("/insights/deal-health");
 
   if (loading) return <Loading />;
   if (error) return <ErrorState message={error.message} onRetry={reload} />;
   if (!data) return null;
 
-  async function act(alertId: number, actionType: "NUDGE" | "ESCALATE") {
-    setBusy(true);
-    setActionError(null);
-    try {
-      await post(`/insights/alerts/${alertId}/act`, { action_type: actionType, note: "" });
-      await reload();
-    } catch (err) {
-      setActionError(err instanceof ApiError ? err.message : "Could not record that action");
-    } finally {
-      setBusy(false);
-    }
-  }
+  const mayDecide = role !== null && MAY_DECIDE.includes(role);
 
   return (
     <>
@@ -56,12 +106,6 @@ export default function DealHealthPage() {
         title="Deal Health and Anomaly Dashboard"
         subtitle="Real-time flags for stalled deals and unusual discount patterns."
       />
-
-      {actionError && (
-        <div className="mb-4">
-          <ErrorState message={actionError} />
-        </div>
-      )}
 
       <div className="mb-6 grid gap-4 md:grid-cols-3">
         <StatCard
@@ -91,16 +135,18 @@ export default function DealHealthPage() {
             hint="Alerts appear here as deals go quiet or discounts drift from a rep's norm."
           />
         ) : (
-          <Table columns={["Deal", "Customer", "Issue", "Severity", "Flagged", "Action"]}>
+          <Table
+            columns={["Deal", "Customer", "Issue", "Severity", "Stage", "Flagged", "Action"]}
+          >
             {data.alerts.map((alert) => (
               <Row key={alert.id}>
                 <Cell>
-                  <button
-                    onClick={() => router.push(`/quotations/${alert.quotation_id}`)}
+                  <Link
+                    href={`/quotations/${alert.quotation_id}`}
                     className="font-heading font-medium text-[#0891B2] hover:underline"
                   >
                     {alert.quotation_number}
-                  </button>
+                  </Link>
                 </Cell>
                 <Cell>{alert.customer_name}</Cell>
                 <Cell>
@@ -112,26 +158,30 @@ export default function DealHealthPage() {
                 <Cell>
                   <Badge tone={SEVERITY_TONE[alert.severity]}>{titleCase(alert.severity)}</Badge>
                 </Cell>
+                <Cell>
+                  <StageTrack status={alert.quotation_status} />
+                </Cell>
                 <Cell className="text-[#64748B]">{dateTime(alert.detected_at)}</Cell>
                 <Cell>
-                  <div className="flex gap-2">
-                    <Button
-                      variant="secondary"
-                      className="!px-3 !py-1 text-xs"
-                      disabled={busy}
-                      onClick={() => act(alert.id, "NUDGE")}
+                  {alert.approval_request_id && mayDecide ? (
+                    <Link
+                      href={`/approvals/${alert.approval_request_id}`}
+                      className="text-[12px] font-medium whitespace-nowrap text-[#0891B2] hover:underline"
                     >
-                      Nudge Rep
-                    </Button>
-                    <Button
-                      variant="danger"
-                      className="!px-3 !py-1 text-xs"
-                      disabled={busy}
-                      onClick={() => act(alert.id, "ESCALATE")}
+                      Review approval &rarr;
+                    </Link>
+                  ) : alert.approval_request_id ? (
+                    <span className="text-[11px] whitespace-nowrap text-[#64748B]">
+                      Sales Manager / Finance decide
+                    </span>
+                  ) : (
+                    <Link
+                      href={`/quotations/${alert.quotation_id}`}
+                      className="text-[12px] font-medium whitespace-nowrap text-[#0891B2] hover:underline"
                     >
-                      Escalate
-                    </Button>
-                  </div>
+                      Open quotation &rarr;
+                    </Link>
+                  )}
                 </Cell>
               </Row>
             ))}
@@ -144,8 +194,13 @@ export default function DealHealthPage() {
             averages 8% is a signal; the same 22% from a rep who averages 20% is not.
           </Note>
           <Note>
-            Nudging or escalating writes to the deal&apos;s own audit trail as well as the alert, so
-            the action shows up in the quotation&apos;s history — not just on this dashboard.
+            The Stage column reads the quotation&apos;s own status, so this dashboard says not just
+            that a deal is at risk but where it is stuck — waiting on an approver reads very
+            differently from waiting on the customer.
+          </Note>
+          <Note>
+            Only a Sales Manager or Finance can decide a flagged quote, so only they get the
+            Review approval link. The same rule is enforced on the server.
           </Note>
         </div>
       </Card>
