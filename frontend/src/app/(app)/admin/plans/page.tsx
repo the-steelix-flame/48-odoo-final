@@ -50,6 +50,11 @@ const INTERVALS: { value: RecurringInterval; label: string; hint: string }[] = [
   { value: "MONTHLY", label: "Monthly", hint: "Calendar months — Jan 31 renews Feb 28." },
   { value: "QUARTERLY", label: "Quarterly", hint: "Every 3 calendar months." },
   { value: "YEARLY", label: "Yearly", hint: "Every 12 calendar months." },
+  {
+    value: "BIENNIAL",
+    label: "Every 2 years",
+    hint: "Every 24 calendar months — multi-year care plans and SLAs.",
+  },
 ];
 
 const PRORATION_MODES: { value: ProrationMode; label: string; hint: string }[] = [
@@ -76,6 +81,10 @@ type Draft = {
   refund_mode: RefundMode;
   bill_in_advance: boolean;
   is_active: boolean;
+  /** Create-only, and kept as strings so an empty box stays empty rather than
+   *  silently becoming 0. Editing a plan never re-prices its product. */
+  list_price?: string;
+  cost_price?: string;
 };
 
 const BLANK: Draft = {
@@ -86,6 +95,8 @@ const BLANK: Draft = {
   refund_mode: "PRORATED",
   bill_in_advance: true,
   is_active: true,
+  list_price: "",
+  cost_price: "",
 };
 
 const labelOf = <T extends string>(
@@ -129,7 +140,16 @@ export default function PlanManagementPage() {
 
   async function createPlan(event: React.FormEvent) {
     event.preventDefault();
-    const created = await run(() => post<AdminPlan>("/admin/plans", draft));
+    // The server wants numbers or null, not the empty strings an untouched
+    // box holds. Cost is optional — it defaults to 40% of list server-side.
+    const { list_price, cost_price, ...policy } = draft;
+    const created = await run(() =>
+      post<AdminPlan>("/admin/plans", {
+        ...policy,
+        list_price: list_price ? Number(list_price) : null,
+        cost_price: cost_price ? Number(cost_price) : null,
+      }),
+    );
     if (created) {
       setShowForm(false);
       setDraft(BLANK);
@@ -138,7 +158,10 @@ export default function PlanManagementPage() {
 
   async function saveEdit(planId: number) {
     if (!edit) return;
-    const saved = await run(() => patch<AdminPlan>(`/admin/plans/${planId}`, edit));
+    // Strip the create-only price fields; UpdatePlanIn rejects anything that
+    // is not an editable policy field.
+    const { list_price: _lp, cost_price: _cp, ...policy } = edit;
+    const saved = await run(() => patch<AdminPlan>(`/admin/plans/${planId}`, policy));
     if (saved) setEdit(null);
   }
 
@@ -293,13 +316,42 @@ export default function PlanManagementPage() {
           <Card title="Define a plan">
             <form onSubmit={createPlan}>
               <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-                <Field label="Plan name" hint="What reps will see in the picker.">
+                <Field
+                  label="Plan name"
+                  hint="Name it for the service, not the cadence — the cadence is the next field."
+                >
                   <input
                     className={inputClass}
                     value={draft.name}
                     onChange={(e) => setDraft({ ...draft, name: e.target.value })}
-                    placeholder="Enterprise Annual"
+                    placeholder="Aftercare Service"
                     required
+                  />
+                </Field>
+                <Field
+                  label="List price"
+                  hint="Per period. Creates the product reps add to a quote."
+                >
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    className={inputClass}
+                    value={draft.list_price}
+                    onChange={(e) => setDraft({ ...draft, list_price: e.target.value })}
+                    placeholder="1400.00"
+                    required
+                  />
+                </Field>
+                <Field label="Cost price" hint="Drives margin. Defaults to 40% of list.">
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    className={inputClass}
+                    value={draft.cost_price}
+                    onChange={(e) => setDraft({ ...draft, cost_price: e.target.value })}
+                    placeholder="520.00"
                   />
                 </Field>
                 {policyFields(draft, (change) => setDraft({ ...draft, ...change }))}

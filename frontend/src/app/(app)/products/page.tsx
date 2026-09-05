@@ -25,7 +25,17 @@ import {
 import { money, percent } from "@/lib/format";
 import { useAuth } from "@/lib/auth";
 import { useApi } from "@/lib/useApi";
-import type { Category, Product } from "@/types";
+import type { Category, Product, RecurringPlanT } from "@/types";
+
+/** Cadence as it reads in the plan picker. Falls back to the raw value, so a
+ *  cadence added to the backend enum still renders rather than showing blank. */
+const INTERVAL_LABELS: Record<string, string> = {
+  WEEKLY: "Weekly",
+  MONTHLY: "Monthly",
+  QUARTERLY: "Quarterly",
+  YEARLY: "Yearly",
+  BIENNIAL: "Every 2 years",
+};
 
 /** Mirrors `ProductIn`. Prices are kept as strings so the inputs stay
  *  controlled and empty means empty, not 0. */
@@ -38,6 +48,7 @@ const BLANK = {
   cost_price: "",
   tax_percent: "0",
   is_subscription: false,
+  recurring_plan_id: "",
 };
 
 export default function ProductsPage() {
@@ -45,6 +56,9 @@ export default function ProductsPage() {
   const { role } = useAuth();
   const { data: products, error, loading, reload } = useApi<Product[]>("/catalog/products");
   const { data: categories } = useApi<Category[]>("/catalog/categories");
+  // Active plans only. A retired plan must not be attachable to a new
+  // product — that is how a dead billing policy comes back to life.
+  const { data: plans } = useApi<RecurringPlanT[]>("/subscriptions/plans");
 
   const [creating, setCreating] = useState(false);
   const [form, setForm] = useState({ ...BLANK });
@@ -54,7 +68,15 @@ export default function ProductsPage() {
   // The backend restricts create to ADMIN, so don't offer it to anyone else.
   const canCreate = role === "ADMIN";
   const complete =
-    form.name.trim() && form.sku.trim() && form.category_id && form.base_price && form.cost_price;
+    form.name.trim() &&
+    form.sku.trim() &&
+    form.category_id &&
+    form.base_price &&
+    form.cost_price &&
+    // A recurring product with no plan passes creation and then throws on the
+    // confirm path — "no plan attached" — after the customer has accepted.
+    // Cheaper to refuse it here.
+    (!form.is_subscription || form.recurring_plan_id);
 
   async function create() {
     setSaving(true);
@@ -69,6 +91,9 @@ export default function ProductsPage() {
         cost_price: form.cost_price,
         tax_percent: form.tax_percent || "0",
         is_subscription: form.is_subscription,
+        recurring_plan_id: form.is_subscription && form.recurring_plan_id
+          ? Number(form.recurring_plan_id)
+          : null,
       });
       setForm({ ...BLANK });
       setCreating(false);
@@ -193,11 +218,38 @@ export default function ProductsPage() {
                 <input
                   type="checkbox"
                   checked={form.is_subscription}
-                  onChange={(e) => setForm({ ...form, is_subscription: e.target.checked })}
+                  onChange={(e) =>
+                    setForm({
+                      ...form,
+                      is_subscription: e.target.checked,
+                      // Clearing the plan alongside the box stops a stale id
+                      // riding along on a product that is no longer recurring.
+                      recurring_plan_id: e.target.checked ? form.recurring_plan_id : "",
+                    })
+                  }
                 />
                 Bills recurrently
               </label>
             </Field>
+            {form.is_subscription && (
+              <Field
+                label="Billing plan"
+                hint="Sets the cadence, proration and refund policy this product inherits"
+              >
+                <select
+                  className={inputClass}
+                  value={form.recurring_plan_id}
+                  onChange={(e) => setForm({ ...form, recurring_plan_id: e.target.value })}
+                >
+                  <option value="">Choose a plan…</option>
+                  {(plans ?? []).map((plan) => (
+                    <option key={plan.id} value={plan.id}>
+                      {plan.name} ({INTERVAL_LABELS[plan.interval] ?? plan.interval})
+                    </option>
+                  ))}
+                </select>
+              </Field>
+            )}
           </div>
         </Card>
       )}

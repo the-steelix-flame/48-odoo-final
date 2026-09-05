@@ -100,6 +100,10 @@ class RecurringInterval(models.TextChoices):
     MONTHLY = "MONTHLY", "Monthly"
     QUARTERLY = "QUARTERLY", "Quarterly"
     YEARLY = "YEARLY", "Yearly"
+    # Two-year terms are how hardware care plans and multi-year SLAs are sold.
+    # `next_period` must learn every value added here or it raises on the
+    # confirm path — the enum is not the only place a cadence lives.
+    BIENNIAL = "BIENNIAL", "Every 2 years"
 
 
 class ProrationMode(models.TextChoices):
