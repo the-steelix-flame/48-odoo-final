@@ -29,6 +29,15 @@ export type ApprovalStatus = "PENDING" | "APPROVED" | "REJECTED" | "RETURNED" | 
 export type InvoiceStatus = "DRAFT" | "OPEN" | "PARTIALLY_PAID" | "PAID" | "VOID";
 export type InvoiceType = "ONE_TIME" | "RECURRING" | "PRORATION";
 export type SubscriptionStatus = "ACTIVE" | "PAUSED" | "CANCELLED";
+
+// The four fields that make up a subscription plan's billing policy. They
+// mirror `RecurringInterval`, `ProrationMode`, `CancellationPolicy` and
+// `RefundMode` in `common/enums.py`; `RecurringPlanT` predates them and still
+// types these as plain strings, which is why plan admin uses `AdminPlan`.
+export type RecurringInterval = "WEEKLY" | "MONTHLY" | "QUARTERLY" | "YEARLY";
+export type ProrationMode = "DAILY" | "NONE" | "FULL_PERIOD";
+export type CancellationPolicy = "IMMEDIATE" | "END_OF_PERIOD";
+export type RefundMode = "PRORATED" | "NONE";
 export type AlertType = "STALLED" | "DISCOUNT_ANOMALY" | "DELIVERY_SLIPPAGE";
 export type AlertSeverity = "LOW" | "MEDIUM" | "HIGH";
 export type FulfillmentStatus =
@@ -195,6 +204,32 @@ export interface AdminUserDetail {
 export interface SalesTeam {
   id: number;
   name: string;
+}
+
+/**
+ * A subscription plan as Admin sees it — `RecurringPlanT` plus the usage and
+ * policy context the management screen needs. Retired plans appear here and
+ * nowhere else, because only Admin can bring one back.
+ */
+export interface AdminPlan {
+  id: number;
+  name: string;
+  interval: RecurringInterval;
+  proration_mode: ProrationMode;
+  cancellation_policy: CancellationPolicy;
+  refund_mode: RefundMode;
+  bill_in_advance: boolean;
+  is_active: boolean;
+  created_at: string;
+  subscription_count: number;
+  active_subscription_count: number;
+  product_count: number;
+  /** True while live subscriptions pin the billing cadence. */
+  interval_locked: boolean;
+  /** Plain-English reading of the four policy fields. */
+  policy_summary: string[];
+  /** Legal but self-defeating combinations, e.g. a refund mode never reached. */
+  policy_warnings: string[];
 }
 
 // ---------------------------------------------------------------- catalog
