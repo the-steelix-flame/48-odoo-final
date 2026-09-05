@@ -162,14 +162,19 @@ export function Row({
   children: ReactNode;
   onClick?: () => void;
 }) {
+  // The hover strip is drawn with an inset box-shadow rather than an extra
+  // <td>. A spacer cell counts as a real column, so every clickable table
+  // rendered one more cell than it had headers and the whole row sat shifted
+  // one column right of its own heading.
   return (
     <tr
       onClick={onClick}
-      className={`group relative text-[#334155] transition-colors ${onClick ? "cursor-pointer hover:bg-[#F8FAFC]" : ""}`}
+      className={`text-[#334155] transition-colors ${
+        onClick
+          ? "cursor-pointer hover:bg-[#F8FAFC] hover:shadow-[inset_2px_0_0_0_#0891B2]"
+          : ""
+      }`}
     >
-      {onClick && (
-        <td className="absolute bottom-0 left-0 top-0 w-[2px] bg-transparent transition-colors group-hover:bg-[#0891B2]"></td>
-      )}
       {children}
     </tr>
   );

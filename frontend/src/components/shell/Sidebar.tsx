@@ -6,26 +6,54 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 import { useAuth } from "@/lib/auth";
-import type { Role } from "@/types";
+import { useApi } from "@/lib/useApi";
+import type {
+  DealHealth,
+  InternalNegotiationRequest,
+  OrderAwaiting,
+  QuotationSummary,
+  Role,
+} from "@/types";
 
-type NavItem = { href: string; label: string; badge?: string; roles?: Role[] };
+type NavItem = { href: string; label: string; badge?: number; roles?: Role[] };
 
-const NAV: NavItem[] = [
-  { href: "/dashboard", label: "Dashboard" },
-  { href: "/quotations", label: "Quotations", badge: "12" },
-  { href: "/approvals", label: "Approvals", badge: "3" },
-  { href: "/negotiations", label: "Negotiations" },
-  { href: "/fulfillment", label: "Fulfillment", badge: "2" },
-  { href: "/subscriptions", label: "Subscriptions" },
-  { href: "/invoices", label: "Invoices", badge: "4" },
-  { href: "/deal-health", label: "Deal Health", badge: "3" },
-  { href: "/reports", label: "Reports" },
-  { href: "/products", label: "Products" },
-];
+/** Statuses that still want a human. A CONFIRMED quote is finished work, so
+ *  counting it would make the badge grow forever and mean nothing. */
+const OPEN_QUOTE_STATUSES = ["DRAFT", "PENDING_APPROVAL", "APPROVED", "SENT", "UNDER_NEGOTIATION"];
 
 export function Sidebar() {
   const pathname = usePathname();
   const { role, logout } = useAuth();
+
+  // Badges were hardcoded ("12", "3", "4"…), so the sidebar confidently
+  // contradicted the very page it linked to — Approvals read 3 above a screen
+  // showing none pending. Every badge is now derived from the same endpoint
+  // the destination screen uses, so they cannot disagree.
+  const { data: quotations } = useApi<QuotationSummary[]>("/quotations/");
+  const { data: approvals } = useApi<{ pending: number }>("/approvals/counts");
+  const { data: negotiations } = useApi<InternalNegotiationRequest[]>(
+    "/portal/internal/requests?status=SUBMITTED",
+  );
+  const { data: orders } = useApi<OrderAwaiting[]>("/fulfillment/orders");
+  const { data: invoices } = useApi<{ unpaid: number }>("/billing/invoices/counts");
+  const { data: health } = useApi<DealHealth>("/insights/deal-health");
+
+  const openQuotes = (quotations ?? []).filter((q) =>
+    OPEN_QUOTE_STATUSES.includes(q.status),
+  ).length;
+
+  const NAV: NavItem[] = [
+    { href: "/dashboard", label: "Dashboard" },
+    { href: "/quotations", label: "Quotations", badge: openQuotes },
+    { href: "/approvals", label: "Approvals", badge: approvals?.pending },
+    { href: "/negotiations", label: "Negotiations", badge: negotiations?.length },
+    { href: "/fulfillment", label: "Fulfillment", badge: orders?.length },
+    { href: "/subscriptions", label: "Subscriptions" },
+    { href: "/invoices", label: "Invoices", badge: invoices?.unpaid },
+    { href: "/deal-health", label: "Deal Health", badge: health?.alerts.length },
+    { href: "/reports", label: "Reports" },
+    { href: "/products", label: "Products" },
+  ];
 
   const visible = NAV.filter((item) => !item.roles || (role && item.roles.includes(role)));
 
@@ -64,11 +92,13 @@ export function Sidebar() {
               }`}
             ></span>
             <span className="flex-1">{item.label}</span>
-            {item.badge && (
+            {/* `{0 && …}` renders a literal 0, and "nothing waiting" is better
+                said with no badge at all than with a grey zero. */}
+            {item.badge !== undefined && item.badge > 0 ? (
               <span className="rounded-[6px] border border-[rgba(34,211,238,0.3)] bg-[rgba(34,211,238,0.2)] p-[2px_6px] font-mono text-[10.5px] text-[#B7EDF7]">
                 {item.badge}
               </span>
-            )}
+            ) : null}
           </Link>
         );
       })}

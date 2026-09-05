@@ -23,6 +23,9 @@ function localAddresses() {
 const nextConfig = {
   reactStrictMode: true,
   allowedDevOrigins: [...localAddresses(), "localhost", "127.0.0.1"],
+  // The dev badge defaults to the bottom-left, which is exactly where the
+  // sidebar's Log out sits — it covered the control during the demo.
+  devIndicators: { position: "bottom-right" },
 };
 
 export default nextConfig;
