@@ -660,6 +660,8 @@ export interface PortalQuotationRow {
   total: string;
   line_count: number;
   sent_at?: string | null;
+  /** What the rep has taken off, as a share of the pre-discount subtotal. */
+  effective_discount_percent: string;
 }
 
 export interface PortalQuotation {
@@ -674,6 +676,8 @@ export interface PortalQuotation {
   tax_total: string;
   total: string;
   valid_until?: string | null;
+  /** What the rep has taken off, as a share of the pre-discount subtotal. */
+  effective_discount_percent: string;
   company_name: string;
   lines: PortalLine[];
   timeline: TimelineEntry[];

@@ -46,7 +46,6 @@ export default function PortalQuotationPage({ params }: { params: Promise<{ id: 
   const [deliveryDate, setDeliveryDate] = useState("");
   const [message, setMessage] = useState("");
   const [lineComment, setLineComment] = useState<Record<number, string>>({});
-  const [chat, setChat] = useState("");
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [confirmNotice, setConfirmNotice] = useState<string | null>(null);
@@ -105,6 +104,23 @@ export default function PortalQuotationPage({ params }: { params: Promise<{ id: 
       setLineComment({});
     } catch (err) {
       setActionError(err instanceof ApiError ? err.message : "Could not submit your request");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function rejectQuotation() {
+    setBusy(true);
+    setActionError(null);
+    setConfirmNotice(null);
+    try {
+      setData(
+        await post<PortalQuotation>(`/portal/quotations/${id}/reject`, { note: message }),
+      );
+      setMessage("");
+      setConfirmNotice("You've declined this quotation. Your account manager has been told.");
+    } catch (err) {
+      setActionError(err instanceof ApiError ? err.message : "Could not decline");
     } finally {
       setBusy(false);
     }
@@ -195,15 +211,34 @@ export default function PortalQuotationPage({ params }: { params: Promise<{ id: 
       </Card>
 
       {open && (
-        <Card title="Request a change" className="mb-6">
+        <Card title="Your decision" className="mb-6">
           <p className="mb-4 text-sm text-[#64748B]">
-            Ask a question on any line, or propose different terms. No email needed.
+            Accept these terms, propose different ones, or decline. No email needed.
           </p>
+
+          {/* The discount already on the table. It was only visible per line,
+              so an order-level discount on top of them meant no single number
+              on the page answered "what are we actually being given?". */}
+          <div className="mb-5 flex flex-wrap items-center gap-3 rounded-lg border border-[#BAE6FD] bg-[#F0F9FF] px-4 py-3">
+            <span className="text-sm text-[#0369A1]">Discount currently offered</span>
+            <span className="font-heading text-[22px] font-bold text-[#0C4A6E]">
+              {percent(data.effective_discount_percent, 1)}
+            </span>
+            <span className="text-sm text-[#0369A1]">
+              — {money(data.discount_total, data.currency)} off{" "}
+              {money(data.subtotal, data.currency)}
+            </span>
+          </div>
 
           <div className="space-y-3">
             {data.lines.map((line) => (
               <div key={line.id} className="grid gap-2 sm:grid-cols-[200px_1fr] sm:items-center">
-                <span className="text-sm text-[#475569]">{line.description}</span>
+                <span className="text-sm text-[#475569]">
+                  {line.description}
+                  <span className="ml-2 text-xs text-[#94A3B8]">
+                    {percent(line.discount_percent, 0)} off
+                  </span>
+                </span>
                 <input
                   className={inputClass}
                   placeholder="Add a comment about this line…"
@@ -250,28 +285,34 @@ export default function PortalQuotationPage({ params }: { params: Promise<{ id: 
             </Field>
           </div>
 
+          {/* Three answers, and only the customer gets all three. Accepting
+              and negotiating are blocked while a request of theirs is still
+              unanswered — the server refuses both, and they used to find that
+              out by clicking. Declining is never blocked: "no thank you" must
+              always be available, or a deal they've already refused sits open
+              pretending to be live. */}
           <div className="mt-5 flex flex-wrap items-center gap-2">
-            {/* Both actions used to stay live regardless of state, so Confirm
-                was offered even while a request sat unanswered — the server
-                refuses that, and the customer only found out by clicking. Each
-                button now says why it can't be used instead of failing. */}
-            <Button
-              variant="secondary"
-              onClick={submitRequest}
-              disabled={busy || awaitingOurReply}
-            >
-              Submit Request
-            </Button>
             <Button
               variant="success"
               onClick={confirmQuotation}
               disabled={busy || awaitingOurReply}
             >
-              Confirm Quotation
+              Accept
+            </Button>
+            <Button
+              variant="secondary"
+              onClick={submitRequest}
+              disabled={busy || awaitingOurReply}
+            >
+              Negotiate
+            </Button>
+            <Button variant="danger" onClick={rejectQuotation} disabled={busy}>
+              Reject
             </Button>
             {awaitingOurReply && (
               <span className="text-xs text-[#92400E]">
-                Waiting on our reply to your request — you can confirm once we&apos;ve responded.
+                Waiting on our reply to your request — you can accept or negotiate again once
+                we&apos;ve responded.
               </span>
             )}
           </div>
@@ -349,43 +390,10 @@ export default function PortalQuotationPage({ params }: { params: Promise<{ id: 
           emptyHint="Questions and counter-offers appear here."
         />
 
-        {open && (
-          <div className="mt-5 border-t border-edge pt-4">
-            <Field label="Send a message" hint="For anything that isn't about price.">
-              <textarea
-                rows={2}
-                className={inputClass}
-                value={chat}
-                onChange={(e) => setChat(e.target.value)}
-                placeholder="Type a message…"
-              />
-            </Field>
-            <div className="mt-3">
-              <Button
-                variant="secondary"
-                disabled={busy || !chat.trim()}
-                onClick={async () => {
-                  setBusy(true);
-                  setActionError(null);
-                  try {
-                    setData(
-                      await post<PortalQuotation>(`/portal/quotations/${id}/messages`, {
-                        body: chat,
-                      }),
-                    );
-                    setChat("");
-                  } catch (err) {
-                    setActionError(err instanceof ApiError ? err.message : "Could not send");
-                  } finally {
-                    setBusy(false);
-                  }
-                }}
-              >
-                Send message
-              </Button>
-            </div>
-          </div>
-        )}
+        {/* The free-text message box is gone from both sides. Every message
+            that matters now rides along with a decision — the note on a
+            counter-offer, the comment on a line — so a standalone chat channel
+            was a second place to say things that nobody was obliged to read. */}
       </Card>
     </>
   );

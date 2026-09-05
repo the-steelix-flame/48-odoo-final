@@ -52,17 +52,24 @@ ALLOWED_TRANSITIONS: dict[str, set[str]] = {
     QuotationStatus.APPROVED: {
         QuotationStatus.SENT,
         QuotationStatus.CONFIRMED,
+        # A customer can decline once it is in front of them. Reachable from
+        # every state they can see, because "no thank you" is a legitimate
+        # answer at any point in the conversation and the alternative is a
+        # quote that sits open forever pretending to be live.
+        QuotationStatus.REJECTED,
         QuotationStatus.CANCELLED,
     },
     QuotationStatus.SENT: {
         QuotationStatus.UNDER_NEGOTIATION,
         QuotationStatus.CONFIRMED,
+        QuotationStatus.REJECTED,
         QuotationStatus.CANCELLED,
     },
     QuotationStatus.UNDER_NEGOTIATION: {
         QuotationStatus.PENDING_APPROVAL,  # counter pushed it back over a ceiling
         QuotationStatus.APPROVED,
         QuotationStatus.CONFIRMED,
+        QuotationStatus.REJECTED,
         QuotationStatus.CANCELLED,
     },
     QuotationStatus.CONFIRMED: set(),

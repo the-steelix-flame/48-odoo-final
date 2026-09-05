@@ -35,10 +35,8 @@ export function RepNegotiationPanel({
   /** Accepting a counter rewrites the lines, so the parent must refetch. */
   onQuotationChanged: () => void;
 }) {
-  const [reply, setReply] = useState("");
   const [counter, setCounter] = useState("");
   const [counterNote, setCounterNote] = useState("");
-  const [rejectNote, setRejectNote] = useState("");
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
 
@@ -54,8 +52,13 @@ export function RepNegotiationPanel({
   if (!data.has_thread && data.requests.length === 0) return null;
 
   const open = data.open_request;
-  const awaitingUs = open?.status === "SUBMITTED";
-  const awaitingThem = open?.status === "COUNTERED";
+  const rejectedByCustomer = data.status === "REJECTED";
+  // Nothing to answer once the customer has walked away.
+  const awaitingUs = open?.status === "SUBMITTED" && !rejectedByCustomer;
+  const awaitingThem = open?.status === "COUNTERED" && !rejectedByCustomer;
+  const lastRejection = [...data.timeline]
+    .reverse()
+    .find((entry) => entry.kind === "REJECTED" && entry.author_type === "CUSTOMER");
 
   async function run(fn: () => Promise<unknown>, refetchQuotation = false) {
     setBusy(true);
@@ -64,10 +67,8 @@ export function RepNegotiationPanel({
       const result = await fn();
       setData(result as NegotiationView);
       if (refetchQuotation) onQuotationChanged();
-      setReply("");
       setCounter("");
       setCounterNote("");
-      setRejectNote("");
     } catch (err) {
       setActionError(err instanceof ApiError ? err.message : "Something went wrong");
     } finally {
@@ -80,7 +81,9 @@ export function RepNegotiationPanel({
       title="Negotiation"
       subtitle={`With ${data.customer_name}`}
       actions={
-        awaitingUs ? (
+        rejectedByCustomer ? (
+          <Badge tone="red">Rejected by customer</Badge>
+        ) : awaitingUs ? (
           <Badge tone="amber">Awaiting your reply</Badge>
         ) : awaitingThem ? (
           <Badge tone="blue">Awaiting customer</Badge>
@@ -152,54 +155,35 @@ export function RepNegotiationPanel({
               </div>
             </div>
 
-            <div>
-              <Field label="Or decline, with a reason">
-                <input
-                  className={inputClass}
-                  value={rejectNote}
-                  onChange={(e) => setRejectNote(e.target.value)}
-                  placeholder="We can't go below list on services."
-                />
-              </Field>
-              <div className="mt-3 flex flex-wrap gap-2">
-                <Button
-                  variant="success"
-                  disabled={busy}
-                  onClick={() =>
-                    // Accepting already appends an ACCEPTED event carrying the
-                    // agreed figure. Posting a "we've accepted" message on top
-                    // would say the same thing twice in the thread.
-                    run(
-                      async () => {
-                        await post(`/portal/internal/requests/${open!.id}/accept`);
-                        return post(
-                          `/portal/internal/quotations/${quotationId}/negotiation`,
-                        );
-                      },
-                      true,
-                    )
-                  }
-                >
-                  Accept their {open?.requested_discount_percent
-                    ? percent(open.requested_discount_percent, 0)
-                    : "request"}
-                </Button>
-                <Button
-                  variant="danger"
-                  disabled={busy || !rejectNote.trim()}
-                  onClick={() =>
-                    run(() =>
-                      post(`/portal/internal/requests/${open!.id}/reject`, {
-                        note: rejectNote,
-                      }).then(() =>
-                        post(`/portal/internal/quotations/${quotationId}/negotiation`),
-                      ),
-                    )
-                  }
-                >
-                  Decline
-                </Button>
-              </div>
+            {/* There is deliberately no Decline here. A seller rejecting their
+                own deal is just deleting their own work — if the number doesn't
+                suit, the answer is a counter. Walking away is the customer's
+                call, and only they get that button. */}
+            <div className="flex flex-col justify-end">
+              <Button
+                variant="success"
+                disabled={busy}
+                onClick={() =>
+                  // Accepting already appends an ACCEPTED event carrying the
+                  // agreed figure, so there is nothing to post on top of it.
+                  run(
+                    async () => {
+                      await post(`/portal/internal/requests/${open!.id}/accept`);
+                      return post(
+                        `/portal/internal/quotations/${quotationId}/negotiation`,
+                      );
+                    },
+                    true,
+                  )
+                }
+              >
+                Accept their {open?.requested_discount_percent
+                  ? percent(open.requested_discount_percent, 0)
+                  : "request"}
+              </Button>
+              <p className="mt-2 text-xs text-[#64748B]">
+                Or counter with your own number on the left.
+              </p>
             </div>
           </div>
 
@@ -216,36 +200,28 @@ export function RepNegotiationPanel({
         <div className="mt-5">
           <Note>
             You offered {percent(open?.counter_discount_percent, 0)}. Waiting for{" "}
-            {data.customer_name} to accept it or come back with another number.
+            {data.customer_name} to accept it, come back with another number, or decline.
           </Note>
         </div>
       )}
 
-      {/* ------------------------------------------- plain reply */}
-      <div className="mt-5 border-t border-edge pt-4">
-        <Field label="Reply" hint="For questions that aren't about price.">
-          <textarea
-            rows={2}
-            className={inputClass}
-            value={reply}
-            onChange={(e) => setReply(e.target.value)}
-            placeholder="Type a message to the customer…"
-          />
-        </Field>
-        <div className="mt-3">
-          <Button
-            variant="secondary"
-            disabled={busy || !reply.trim()}
-            onClick={() =>
-              run(() =>
-                post(`/portal/internal/quotations/${quotationId}/messages`, { body: reply }),
-              )
-            }
-          >
-            Send message
-          </Button>
+      {/* The customer walked away. Without this the panel just went quiet and
+          the rep had to infer it from the quotation status badge. */}
+      {rejectedByCustomer && (
+        <div className="mt-5 rounded-lg border border-[#FECACA] bg-[#FEF2F2] p-4">
+          <p className="text-sm font-medium text-[#991B1B]">
+            {data.customer_name} declined this quotation.
+          </p>
+          {lastRejection?.body && (
+            <p className="mt-1 text-sm text-[#B91C1C]">
+              &ldquo;{lastRejection.body}&rdquo;
+            </p>
+          )}
+          <p className="mt-2 text-xs text-[#B91C1C]">
+            The conversation is closed. Revise the quote and send it again if you want another go.
+          </p>
         </div>
-      </div>
+      )}
     </Card>
   );
 }

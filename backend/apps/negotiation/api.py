@@ -94,6 +94,8 @@ class PortalQuotationRowOut(Schema):
     total: Decimal
     line_count: int
     sent_at: datetime | None = None
+    #: What the rep has taken off, as a share of the pre-discount subtotal.
+    effective_discount_percent: Decimal
 
 
 class PortalQuotationOut(Schema):
@@ -108,6 +110,9 @@ class PortalQuotationOut(Schema):
     tax_total: Decimal
     total: Decimal
     valid_until: date | None = None
+    #: What the rep has taken off, as a share of the pre-discount subtotal.
+    #: Computed here so the portal renders a number rather than deriving one.
+    effective_discount_percent: Decimal
     company_name: str
     lines: list[PortalLineOut]
     timeline: list[TimelineEntryOut]
@@ -156,6 +161,20 @@ class NegotiationOut(Schema):
 # --------------------------------------------------------------------------
 # Customer routes — token-scoped
 # --------------------------------------------------------------------------
+def _effective_discount(quotation: Quotation) -> Decimal:
+    """Total taken off, as a percentage of the pre-discount subtotal.
+
+    The lines each carry their own percentage, but an order-level discount sits
+    on top of them, so no single line answers "how much did they give us?".
+    """
+    subtotal = Decimal(quotation.subtotal or 0)
+    if subtotal <= 0:
+        return Decimal("0.00")
+    return (Decimal(quotation.discount_total or 0) / subtotal * Decimal(100)).quantize(
+        Decimal("0.01")
+    )
+
+
 def _portal_payload(quotation: Quotation) -> dict:
     label, action_required = services.portal_status(quotation.status)
     open_request = services.open_request_for(quotation)
@@ -184,6 +203,7 @@ def _portal_payload(quotation: Quotation) -> dict:
         "tax_total": quotation.tax_total,
         "total": quotation.total,
         "valid_until": quotation.valid_until,
+        "effective_discount_percent": _effective_discount(quotation),
         "company_name": quotation.customer.name,
         "lines": list(quotation.lines.all()),
         "timeline": services.negotiation_timeline(quotation),
@@ -214,6 +234,7 @@ def portal_list_quotations(request):
                 "total": quotation.total,
                 "line_count": quotation.lines.count(),
                 "sent_at": getattr(quotation, "sent_at", None),
+                "effective_discount_percent": _effective_discount(quotation),
             }
         )
     return rows
@@ -272,6 +293,19 @@ def portal_accept_counter(request, quotation_id: int, request_id: int):
     if negotiation_request.quotation_id != quotation.id:
         raise NotFound("Negotiation request not found")
     services.accept_counter(negotiation_request, actor=request.auth)
+    quotation.refresh_from_db()
+    return _portal_payload(quotation)
+
+
+@router.post("/quotations/{quotation_id}/reject", response=PortalQuotationOut, auth=any_auth)
+def portal_reject(request, quotation_id: int, payload: ResolveIn):
+    """Decline the quotation.
+
+    Only the customer gets this. A rep countering their own deal is a
+    negotiation; a rep rejecting it is just deleting their own work.
+    """
+    quotation = services.authorise_portal_access(request.auth, quotation_id)
+    services.reject_by_customer(quotation, actor=request.auth, note=payload.note)
     quotation.refresh_from_db()
     return _portal_payload(quotation)
 

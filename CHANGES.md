@@ -925,6 +925,50 @@ the ACCEPTED event, saying the same thing twice.
 
 ---
 
+### Who gets to say no
+
+A rep had a **Decline** button on their own deal, which is just deleting their own work — if the
+number doesn't suit, the answer is a counter. Meanwhile the customer, the one party with a real
+reason to walk away, had no way to do it: their only exits were accept or keep negotiating, so a
+quote they had already refused sat open pretending to be live.
+
+The two sides now have the answers that belong to them:
+
+| Side | Actions |
+|---|---|
+| Sales rep | **Accept** their number · **Counter** with ours |
+| Customer | **Accept** · **Negotiate** · **Reject** |
+
+| File | Change |
+|---|---|
+| `apps/quotations/services.py` | `REJECTED` reachable from `APPROVED`, `SENT` and `UNDER_NEGOTIATION` — every state the customer can see, because "no thank you" is valid at any point in the conversation. |
+| `apps/negotiation/services.py` | New `reject_by_customer()`. Closes any round still in flight, appends a `REJECTED` event, moves the quotation. |
+| `apps/negotiation/api.py` | `POST /api/portal/quotations/{id}/reject`. Portal-only — there is deliberately no internal equivalent. |
+| `components/negotiation/RepNegotiationPanel.tsx` | Decline removed. New "Rejected by customer" panel carrying their reason, so the rep sees *why* rather than inferring it from a status badge. |
+| `app/portal/quotations/[id]/page.tsx` | Accept / Negotiate / Reject. Accept and Negotiate are blocked while a request of theirs is unanswered; **Reject never is** — refusing must always be available. |
+
+Reject is the one action with no precondition beyond the quotation being live. Blocking it would
+be the same bug as before, in reverse: the customer stuck with a deal the UI won't let them end.
+
+### The discount is now stated, not implied
+
+The portal showed a percentage per line, but an order-level discount sits on top of those, so no
+number on the page answered "what are we actually being offered?". `effective_discount_percent` is
+computed server-side — `discount_total / subtotal` — and shown as a headline figure above the
+decision buttons, with the money either side of it.
+
+### Free-text messaging removed from both sides
+
+The standalone "Send message" box is gone from the rep panel and the portal. Every message that
+matters now rides along with a decision — the note on a counter-offer, the comment on a line — so a
+separate chat channel was a second place to say things that nobody was obliged to read. Existing
+messages still render in the timeline; it is history, and history is not deleted.
+
+Removing it from only one side would have been worse than leaving it: a channel the customer can
+write to and the rep cannot answer is a trap.
+
+---
+
 ## 7. Migrations added by this lane
 
 Anyone pulling this must run `python manage.py migrate`:
