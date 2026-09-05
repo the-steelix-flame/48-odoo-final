@@ -553,11 +553,35 @@ export interface InvoiceDetail extends InvoiceRow {
 }
 
 // ---------------------------------------------------------------- insights
+export interface MoneySummary {
+  /** Deals still in flight. NOT earnings — nothing here is won yet. */
+  pipeline_total: string;
+  /** Value of quotations that reached CONFIRMED. Won, not necessarily paid. */
+  won_value: string;
+  /** Margin on those confirmed deals — the only one of the three that is profit. */
+  won_margin: string;
+  quotation_count: number;
+}
+
+export interface PipelineStage {
+  status: QuotationStatus;
+  label: string;
+  count: number;
+  value: string;
+  percent: number;
+}
+
 export interface DashboardData {
   pending_approvals: number;
   open_quotations: number;
   at_risk_deals: number;
   recent_activity: { quotation_id: number; text: string; at: string }[];
+  company: MoneySummary;
+  pipeline_by_stage: PipelineStage[];
+  /** Cash actually received across every invoice. */
+  collected: string;
+  /** Same summary scoped to the viewer; null when they own no quotations. */
+  mine?: MoneySummary | null;
 }
 
 export interface DealAlert {

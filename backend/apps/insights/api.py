@@ -17,6 +17,7 @@ from apps.common.enums import (
     ApprovalStatus,
     InvoiceStatus,
     QuotationStatus,
+    Role,
 )
 from apps.common.errors import NotFound
 from apps.insights.health import act_on_alert, run_sweep
@@ -26,6 +27,26 @@ from apps.quotations.models import Quotation
 router = Router(auth=internal_auth)
 
 
+class MoneySummaryOut(Schema):
+    """The same four figures, computed for the company or for one rep."""
+
+    #: Value of deals still in flight. NOT earnings - nothing here is won yet.
+    pipeline_total: Decimal
+    #: Value of quotations that reached CONFIRMED. Won, but not necessarily paid.
+    won_value: Decimal
+    #: Margin on those confirmed deals - what the company actually makes.
+    won_margin: Decimal
+    quotation_count: int
+
+
+class PipelineStageOut(Schema):
+    status: str
+    label: str
+    count: int
+    value: Decimal
+    percent: float
+
+
 class DashboardOut(Schema):
     """Screen 2's three cards plus the activity feed."""
 
@@ -33,6 +54,16 @@ class DashboardOut(Schema):
     open_quotations: int
     at_risk_deals: int
     recent_activity: list[dict]
+    #: The hero band used to be hardcoded to $4.2M with 32/45/18/5 split. These
+    #: are the real figures; the brief requires the numbers to be computed, and
+    #: a fabricated headline is the first thing a reviewer would check.
+    company: MoneySummaryOut
+    pipeline_by_stage: list[PipelineStageOut]
+    #: Cash actually received, across every invoice.
+    collected: Decimal
+    #: The same summary scoped to the viewer, when they own any quotations.
+    #: Null for roles that never own deals, so the UI can hide the toggle.
+    mine: MoneySummaryOut | None = None
 
 
 class AlertOut(Schema):
@@ -129,6 +160,10 @@ def dashboard(request):
         ).count(),
         "open_quotations": Quotation.objects.filter(status__in=open_statuses).count(),
         "at_risk_deals": DealAlert.objects.filter(status=AlertStatus.OPEN).count(),
+        "company": _money_summary(Quotation.objects.all(), open_statuses),
+        "pipeline_by_stage": _pipeline_by_stage(open_statuses),
+        "collected": Invoice.objects.aggregate(t=Sum("amount_paid"))["t"] or Decimal("0"),
+        "mine": _mine(request.auth, open_statuses),
         "recent_activity": [
             {
                 "quotation_id": q.id,
@@ -138,6 +173,76 @@ def dashboard(request):
             for q in recent
         ],
     }
+
+
+def _money_summary(qs, open_statuses) -> dict:
+    """Pipeline, won revenue and won margin for a set of quotations.
+
+    Kept deliberately separate because they answer different questions.
+    Pipeline is a forecast of deals still in flight; won_value is revenue on
+    deals that closed; won_margin is the only one of the three that is profit.
+    Collapsing them into a single "total" is what made the old hardcoded
+    headline meaningless.
+    """
+    pipeline = qs.filter(status__in=open_statuses).aggregate(t=Sum("total"))["t"] or Decimal("0")
+    won = qs.filter(status=QuotationStatus.CONFIRMED).aggregate(
+        v=Sum("total"), m=Sum("margin_amount")
+    )
+    return {
+        "pipeline_total": pipeline,
+        "won_value": won["v"] or Decimal("0"),
+        "won_margin": won["m"] or Decimal("0"),
+        "quotation_count": qs.count(),
+    }
+
+
+def _pipeline_by_stage(open_statuses) -> list[dict]:
+    """Real stage split, with percentages derived from value rather than typed in."""
+    rows = (
+        Quotation.objects.filter(status__in=open_statuses)
+        .values("status")
+        .annotate(count=Count("id"), value=Sum("total"))
+    )
+    by_status = {r["status"]: r for r in rows}
+    total = sum((r["value"] or Decimal("0")) for r in rows) or Decimal("0")
+    out = []
+    for status in open_statuses:
+        row = by_status.get(status)
+        value = (row["value"] if row else None) or Decimal("0")
+        out.append(
+            {
+                "status": status,
+                "label": QuotationStatus(status).label,
+                "count": row["count"] if row else 0,
+                "value": value,
+                "percent": float(round(value / total * 100, 1)) if total else 0.0,
+            }
+        )
+    return out
+
+
+#: Only these roles can create a quotation, so only these roles accumulate a
+#: personal total. Kept in step with the guard on POST /quotations/.
+OWNING_ROLES = (Role.SALES_REP, Role.ADMIN)
+
+
+def _mine(user, open_statuses) -> dict | None:
+    """Scoped to the deals this person owns.
+
+    Returns None rather than a row of zeros for anyone who cannot own deals, so
+    the UI hides the toggle instead of offering an empty personal scorecard.
+
+    Note this is deliberately role-gated rather than "owns at least one". Seed
+    data predates the creation rule and still has a Sales Manager and a Finance
+    user owning quotations; their value stays in the company total, it simply is
+    not attributed to them personally any more.
+    """
+    if user is None or user.role not in OWNING_ROLES:
+        return None
+    owned = Quotation.objects.filter(owner_rep=user)
+    if not owned.exists():
+        return None
+    return _money_summary(owned, open_statuses)
 
 
 @router.get("/deal-health", response=DealHealthOut)

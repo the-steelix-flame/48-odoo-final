@@ -29,7 +29,14 @@ import type { Customer, QuotationDetail, QuotationSummary } from "@/types";
 export default function QuotationsPage() {
   const router = useRouter();
   const [view, setView] = useState<"kanban" | "table">("kanban");
-  const { role } = useAuth();
+  /**
+   * Whose deals to show. Both halves of the answer are useful: the card always
+   * names its owner (context you want without clicking), and this filter narrows
+   * to your own book (focus when the board gets busy). The owner already came
+   * back on the payload — it just was not rendered on the kanban cards.
+   */
+  const [owner, setOwner] = useState<"all" | "mine">("all");
+  const { user, role } = useAuth();
   /**
    * Mirrors the guard on POST /quotations/. Building quotations is the Sales
    * Rep's job; a Sales Manager or Finance user reviews and approves them. A
@@ -58,7 +65,11 @@ export default function QuotationsPage() {
   if (loading) return <Loading />;
   if (error) return <ErrorState message={error.message} onRetry={reload} />;
 
-  const quotations = data ?? [];
+  const all = data ?? [];
+  const quotations =
+    owner === "mine" && user ? all.filter((q) => q.owner_rep_id === user.id) : all;
+  /** Only offer the filter to someone who actually appears as an owner. */
+  const ownsAny = Boolean(user && all.some((q) => q.owner_rep_id === user.id));
 
   async function createQuotation() {
     if (!customerId) return;
@@ -89,6 +100,14 @@ export default function QuotationsPage() {
                 + New Quotation
               </Button>
             </span>
+            {ownsAny && (
+              <Button
+                variant={owner === "mine" ? "primary" : "secondary"}
+                onClick={() => setOwner(owner === "mine" ? "all" : "mine")}
+              >
+                {owner === "mine" ? "Showing: My Quotations" : "My Quotations"}
+              </Button>
+            )}
             <Button
               variant="secondary"
               onClick={() => setView(view === "kanban" ? "table" : "kanban")}
@@ -176,6 +195,9 @@ export default function QuotationsPage() {
                       <p className="mt-[4px] font-mono text-[11px] text-[#64748B]">
                         {quotation.number} · {money(quotation.total, quotation.currency)}
                       </p>
+                      <p className="mt-[4px] text-[11px] text-[#94A3B8]">
+                        Opened by {quotation.owner_rep_name}
+                      </p>
                       <div className="mt-[12px] flex flex-wrap gap-[6px]">
                         <Badge tone={RISK_TONE[quotation.risk_band]}>
                           {quotation.risk_band === "NONE" ? "No approval" : quotation.risk_band}
@@ -187,7 +209,9 @@ export default function QuotationsPage() {
                     </button>
                   ))}
                   {cards.length === 0 && (
-                    <p className="py-[24px] text-center text-[13px] text-[#94A3B8]">Empty</p>
+                    <p className="py-[24px] text-center text-[13px] text-[#94A3B8]">
+                      {owner === "mine" ? "None of yours" : "Empty"}
+                    </p>
                   )}
                 </div>
               </div>

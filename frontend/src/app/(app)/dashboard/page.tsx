@@ -2,21 +2,48 @@
 
 /** Screen 2 — Sales Dashboard / Home.  Owner: sinjeki. */
 
+import { useState } from "react";
 import Link from "next/link";
 
 import { Card, ErrorState, Loading, StatCard, Badge } from "@/components/ui";
-import { dateTime } from "@/lib/format";
+import { dateTime, money } from "@/lib/format";
 import { useApi } from "@/lib/useApi";
 import { useAuth } from "@/lib/auth";
 import type { DashboardData } from "@/types";
 
+/** Solid equivalents of STAGE_BAR, for the per-stage rows further down. */
+const STAGE_TRACK: Record<string, string> = {
+  DRAFT: "bg-[#64748B]",
+  PENDING_APPROVAL: "bg-[#F59E0B]",
+  APPROVED: "bg-[#10B981]",
+  SENT: "bg-[#0891B2]",
+  UNDER_NEGOTIATION: "bg-[#7C3AED]",
+};
+
+/** Stage colours for the pipeline bar, keyed on the real status values. */
+const STAGE_BAR: Record<string, string> = {
+  DRAFT: "bg-[#475569]",
+  PENDING_APPROVAL: "bg-gradient-to-r from-[#D97706] to-[#FBBF24]",
+  APPROVED: "bg-gradient-to-r from-[#10B981] to-[#34D399]",
+  SENT: "bg-gradient-to-r from-[#0284C7] to-[#38BDF8]",
+  UNDER_NEGOTIATION: "bg-gradient-to-r from-[#7C3AED] to-[#A78BFA]",
+};
+
 export default function DashboardPage() {
   const { user, role } = useAuth();
+  const [scope, setScope] = useState<"company" | "mine">("company");
   const { data, error, loading, reload } = useApi<DashboardData>("/insights/dashboard");
 
   if (loading) return <Loading />;
   if (error) return <ErrorState message={error.message} onRetry={reload} />;
   if (!data) return null;
+
+  // "Mine" only exists for someone who actually owns deals, so the toggle is
+  // hidden entirely for roles that never carry a quota rather than showing them
+  // a row of zeros.
+  const canScope = Boolean(data.mine);
+  const summary = scope === "mine" && data.mine ? data.mine : data.company;
+  const mineActive = canScope && scope === "mine";
 
   return (
     <div className="animate-dfIn space-y-6">
@@ -57,26 +84,77 @@ export default function DashboardPage() {
           </div>
         </div>
 
-        <div className="relative z-10 mt-[40px] grid grid-cols-4 gap-6 border-t border-[rgba(255,255,255,0.1)] pt-[24px]">
+        {/* Every figure below is computed. This band previously read a
+            hardcoded $4.2M with a 32/45/18/5 split; the real open pipeline is
+            two orders of magnitude smaller, and the brief requires the numbers
+            to come from application logic rather than being typed in. */}
+        <div className="relative z-10 mt-[40px] grid grid-cols-1 gap-6 border-t border-[rgba(255,255,255,0.1)] pt-[24px] lg:grid-cols-4">
           <div>
-            <p className="font-mono text-[11.5px] font-medium tracking-[0.05em] text-[#9CAABC] uppercase">Pipeline Total</p>
+            <div className="flex items-center gap-[8px]">
+              <p className="font-mono text-[11.5px] font-medium tracking-[0.05em] text-[#9CAABC] uppercase">
+                {mineActive ? "My Pipeline" : "Pipeline Total"}
+              </p>
+              {canScope && (
+                <span className="flex overflow-hidden rounded-full border border-[rgba(255,255,255,0.18)]">
+                  {(["company", "mine"] as const).map((option) => (
+                    <button
+                      key={option}
+                      type="button"
+                      onClick={() => setScope(option)}
+                      className={`px-[8px] py-[2px] text-[10px] font-medium tracking-[0.03em] uppercase transition ${
+                        scope === option
+                          ? "bg-[#22D3EE] text-[#0F172A]"
+                          : "text-[#9CAABC] hover:text-white"
+                      }`}
+                    >
+                      {option === "company" ? "Company" : "Mine"}
+                    </button>
+                  ))}
+                </span>
+              )}
+            </div>
             <p className="mt-[8px] font-heading text-[36px] font-bold tracking-[-0.02em] text-white">
-              $4.2M
+              {money(summary.pipeline_total)}
             </p>
+            {/* Pipeline is a forecast. These two are what has actually closed,
+                kept separate so the headline is never mistaken for earnings. */}
+            <div className="mt-[10px] flex flex-wrap gap-x-[18px] gap-y-[2px] font-mono text-[10.5px] tracking-[0.03em] uppercase">
+              <span className="text-[#9CAABC]">
+                Won <span className="text-[#34D399]">{money(summary.won_value)}</span>
+              </span>
+              <span className="text-[#9CAABC]">
+                Expected margin{" "}
+                <span className="text-[#34D399]">{money(summary.won_margin)}</span>
+              </span>
+              {!mineActive && (
+                <span className="text-[#9CAABC]">
+                  Collected <span className="text-[#38BDF8]">{money(data.collected)}</span>
+                </span>
+              )}
+            </div>
           </div>
-          <div className="col-span-3">
-            <div className="mb-[12px] flex items-center justify-between font-mono text-[11px] font-medium tracking-[0.03em] uppercase">
-              <span className="text-[#34D399]">Confirmed (32%)</span>
-              <span className="text-[#38BDF8]">Negotiation (45%)</span>
-              <span className="text-[#FBBF24]">Approvals (18%)</span>
-              <span className="text-[#9CAABC]">Drafts (5%)</span>
+          <div className="lg:col-span-3">
+            <div className="mb-[12px] flex flex-wrap items-center gap-x-[16px] gap-y-[4px] font-mono text-[11px] font-medium tracking-[0.03em] uppercase">
+              {data.pipeline_by_stage.map((stage) => (
+                <span key={stage.status} className="text-[#9CAABC]">
+                  {stage.label} ({stage.percent}%)
+                  <span className="ml-[4px] text-[#64748B]">{stage.count}</span>
+                </span>
+              ))}
             </div>
             <div className="flex h-[8px] w-full overflow-hidden rounded-full bg-[#0F172A]">
-              <div className="h-full bg-gradient-to-r from-[#10B981] to-[#34D399]" style={{ width: "32%" }}></div>
-              <div className="h-full bg-gradient-to-r from-[#0284C7] to-[#38BDF8]" style={{ width: "45%" }}></div>
-              <div className="h-full bg-gradient-to-r from-[#D97706] to-[#FBBF24]" style={{ width: "18%" }}></div>
-              <div className="h-full bg-[#475569]" style={{ width: "5%" }}></div>
+              {data.pipeline_by_stage.map((stage) => (
+                <div
+                  key={stage.status}
+                  title={`${stage.label}: ${stage.count} deals, ${money(stage.value)}`}
+                  className={`h-full ${STAGE_BAR[stage.status] ?? "bg-[#475569]"}`}
+                  style={{ width: `${stage.percent}%` }}
+                />
+              ))}
             </div>
+            <p className="mt-[8px] font-mono text-[10px] tracking-[0.03em] text-[#64748B] uppercase">
+              Share of open pipeline by value
+            </p>
           </div>
         </div>
       </div>
@@ -106,24 +184,34 @@ export default function DashboardPage() {
       <div className="grid gap-6 lg:grid-cols-3">
         <div className="lg:col-span-2">
           <Card title="Pipeline by stage" subtitle="Deals currently moving through the system">
-            {/* Minimal visual placeholder since this isn't fully wired to data yet */}
+            {/* Was a hardcoded placeholder claiming 24 confirmed deals. Once the
+                band above became real the two contradicted each other on the same
+                screen, so this reads the same computed source. */}
             <div className="space-y-4">
-               {[ 
-                 { label: "Draft", val: 12, percent: 15, color: "bg-[#64748B]" },
-                 { label: "Pending Approval", val: 3, percent: 18, color: "bg-[#F59E0B]" },
-                 { label: "Under Negotiation", val: 8, percent: 45, color: "bg-[#0891B2]" },
-                 { label: "Confirmed", val: 24, percent: 32, color: "bg-[#10B981]" }
-               ].map(stage => (
-                 <div key={stage.label}>
-                   <div className="mb-2 flex justify-between text-[13px] font-medium text-[#475569]">
-                     <span>{stage.label}</span>
-                     <span>{stage.val} deals</span>
-                   </div>
-                   <div className="h-2 w-full overflow-hidden rounded-full bg-[#F1F5F9]">
-                     <div className={`h-full rounded-full ${stage.color}`} style={{ width: `${stage.percent}%` }}></div>
-                   </div>
-                 </div>
-               ))}
+              {data.pipeline_by_stage.map((stage) => (
+                <div key={stage.status}>
+                  <div className="mb-2 flex justify-between text-[13px] font-medium text-[#475569]">
+                    <span>{stage.label}</span>
+                    <span>
+                      {stage.count} deal{stage.count === 1 ? "" : "s"}
+                      <span className="ml-[8px] font-mono text-[11px] text-[#94A3B8]">
+                        {money(stage.value)}
+                      </span>
+                    </span>
+                  </div>
+                  <div className="h-2 w-full overflow-hidden rounded-full bg-[#F1F5F9]">
+                    <div
+                      className={`h-full rounded-full ${STAGE_TRACK[stage.status] ?? "bg-[#64748B]"}`}
+                      style={{ width: `${stage.percent}%` }}
+                    />
+                  </div>
+                </div>
+              ))}
+              {data.pipeline_by_stage.every((stage) => stage.count === 0) && (
+                <p className="py-[24px] text-center text-[13px] text-[#94A3B8]">
+                  Nothing is open right now.
+                </p>
+              )}
             </div>
           </Card>
         </div>
