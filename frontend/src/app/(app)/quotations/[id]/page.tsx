@@ -431,23 +431,16 @@ export default function QuotationBuilderPage({ params }: { params: Promise<{ id:
                 >
                   Send to Customer
                 </Button>
-                <Button
-                  variant="success"
-                  disabled={busy}
-                  onClick={async () => {
-                    setBusy(true);
-                    try {
-                      await post(`/quotations/${id}/confirm`);
-                      router.push("/fulfillment");
-                    } catch (err) {
-                      setActionError(err instanceof ApiError ? err.message : "Failed");
-                    } finally {
-                      setBusy(false);
-                    }
-                  }}
-                >
-                  Confirm Order
-                </Button>
+              </div>
+            )}
+
+            {data.status === "SENT" && (
+              <div className="mt-4">
+                <Note>
+                  Sent to the customer. Only the customer can confirm it, from their own portal —
+                  confirming here would skip their sign-off and start fulfilment on terms they had
+                  not yet accepted.
+                </Note>
               </div>
             )}
           </Card>
