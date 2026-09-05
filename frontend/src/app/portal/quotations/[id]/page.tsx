@@ -80,6 +80,8 @@ export default function PortalQuotationPage({ params }: { params: Promise<{ id: 
     data.open_request.counter_discount_percent != null
       ? data.open_request
       : null;
+  /** Their request is unanswered, so the server will refuse a confirmation. */
+  const awaitingOurReply = data.open_request?.status === "SUBMITTED";
 
   async function submitRequest() {
     setBusy(true);
@@ -248,13 +250,30 @@ export default function PortalQuotationPage({ params }: { params: Promise<{ id: 
             </Field>
           </div>
 
-          <div className="mt-5 flex flex-wrap gap-2">
-            <Button variant="secondary" onClick={submitRequest} disabled={busy}>
+          <div className="mt-5 flex flex-wrap items-center gap-2">
+            {/* Both actions used to stay live regardless of state, so Confirm
+                was offered even while a request sat unanswered — the server
+                refuses that, and the customer only found out by clicking. Each
+                button now says why it can't be used instead of failing. */}
+            <Button
+              variant="secondary"
+              onClick={submitRequest}
+              disabled={busy || awaitingOurReply}
+            >
               Submit Request
             </Button>
-            <Button variant="success" onClick={confirmQuotation} disabled={busy}>
+            <Button
+              variant="success"
+              onClick={confirmQuotation}
+              disabled={busy || awaitingOurReply}
+            >
               Confirm Quotation
             </Button>
+            {awaitingOurReply && (
+              <span className="text-xs text-[#92400E]">
+                Waiting on our reply to your request — you can confirm once we&apos;ve responded.
+              </span>
+            )}
           </div>
 
           <div className="mt-4">
@@ -262,6 +281,25 @@ export default function PortalQuotationPage({ params }: { params: Promise<{ id: 
               If the final terms exceed our approval thresholds, the quotation automatically
               re-enters internal approval before it&apos;s accepted.
             </Note>
+          </div>
+        </Card>
+      )}
+
+      {/* Where the actions used to sit once there is nothing left to do. An
+          empty space reads as a missing feature; a status reads as finished. */}
+      {!open && (
+        <Card className="mb-6">
+          <div className="flex flex-wrap items-center gap-3">
+            <Badge tone={data.status === "CONFIRMED" ? "green" : "slate"}>
+              {data.status_label}
+            </Badge>
+            <p className="text-sm text-[#475569]">
+              {data.status === "CONFIRMED"
+                ? "This quotation is confirmed and has moved to fulfillment. Nothing further is needed from you."
+                : data.status === "PENDING_APPROVAL"
+                  ? "Your terms are with our team for internal review. We'll be in touch as soon as it's cleared."
+                  : "This quotation is closed. Contact your account manager if you'd like to reopen it."}
+            </p>
           </div>
         </Card>
       )}

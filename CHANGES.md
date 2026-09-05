@@ -650,6 +650,119 @@ screenshot.
 belongs to an account fails with a clear message rather than silently attaching a portal role to
 an existing staff login.
 
+### The header badge says who you are, not that the rules engine is up
+
+Every internal role saw the same pill in the top bar: a pulsing dot and the words **Rules engine
+live**. It was decorative — nothing behind it ever checked whether the engine was actually running,
+so it was a claim the UI could not have retracted if it were false. Meanwhile the app is
+role-shaped throughout (the nav, the dashboard heading, `/admin` and `/settings` gates, the
+analytics sections), and nothing on screen told you which role you were signed in as. On a demo
+where you switch between four seeded logins, that is the thing you actually need in the header.
+
+The pill now shows the signed-in user's role.
+
+| File | Change |
+|---|---|
+| `lib/format.ts` | New `ROLE_LABEL: Record<Role, string>`. Wording matches the signup form, so the badge reads the same as the role you were given — "Finance / Operations", not `FINANCE`. |
+| `components/shell/Header.tsx` | Pill renders `ROLE_LABEL[user.role]`. |
+
+Two details worth keeping:
+
+- **No fallback role.** The name beside it falls back to `"J. Rao"` while the session loads; the
+  badge does not. Showing someone the wrong user type is worse than briefly showing none, so the
+  pill is omitted until `user` resolves.
+- **The dot no longer pulses.** `animate-dfPulse` said *live*, which is a liveness signal. Identity
+  is not a heartbeat. The keyframe is still defined in `tailwind.config.ts` and is now unused —
+  left in place rather than removed, since it is a shared design token.
+
+Customers are unaffected: `Header` mounts only in the `(app)` shell, and the portal has its own.
+`CUSTOMER` is in the map for completeness.
+
+### Three screens disagreed about how many deals there were
+
+Reported from the UI: the board showed 8 cards while the sidebar said 7, and the sidebar counted a
+negotiation the board's Negotiation column left empty. Three separate causes, all of the same
+shape — a count derived one way, next to a list derived another.
+
+**The board was hiding quotations.** `PIPELINE_STAGES` had five columns for eight statuses. `SENT`,
+`REJECTED` and `CANCELLED` had nowhere to go, so a sent quotation rendered *nowhere* on a screen
+whose own subtitle reads "every quotation in the system". Q-1009 was sitting in exactly that hole.
+The sidebar counted it, so the sidebar looked wrong when it was the board that was lying.
+
+Stages now carry `statuses: QuotationStatus[]` — a list, because `REJECTED` and `CANCELLED` are one
+thing to a reader — and every status is covered. `Closed` is `hideWhenEmpty`, so a terminal column
+doesn't sit empty on every healthy board while still guaranteeing no record is invisible.
+
+**The badge counted a different set.** It filtered to `OPEN_QUOTE_STATUSES`, excluding `CONFIRMED`,
+so it could never match the board even once `SENT` was visible. It now counts what the endpoint
+returns. That is a real trade — the badge grows as confirmed deals accumulate, which is what the
+original comment was guarding against — but a number that quietly disagrees with the list beside it
+is worse than a number that grows. Every other badge means "work waiting"; this one means "how many
+there are", matching the screen it links to.
+
+**A quotation could be under negotiation without being `UNDER_NEGOTIATION`.** The real bug.
+`submit_request` never checked for an already-open round, so a customer could stack a second request
+on an unanswered one. Resolving the newer one left the older orphaned at `SUBMITTED` forever — the
+inbox counted it, the board filed the quotation under whatever status the *newer* request had driven
+it to, and no screen offered a way to clear it. Q-1007 was in precisely that state: request #2
+unanswered since 15:31, request #3 raised 32 seconds later and accepted, quotation moved on to
+`APPROVED`.
+
+Fixed as an invariant rather than a patch: **a quotation is `UNDER_NEGOTIATION` exactly while a round
+is open.**
+
+| Change | |
+|---|---|
+| `submit_request` | Refuses a second request while one is `SUBMITTED` or `COUNTERED`. `open_request_for` always spoke of "the round currently awaiting a reply" in the singular; now nothing can contradict it. |
+| `_reapprove_if_needed` → `_settle_round` | The shared tail of *every* resolved round, decline included. Re-approval when the terms moved and breach a ceiling; otherwise transition out of `UNDER_NEGOTIATION`. |
+| `reject_request` | Now calls it. A decline ends a round as surely as an acceptance, but the quote used to stay parked in the Negotiation column with nothing left to negotiate. |
+| `0007_settle_stranded_negotiations` | Moves already-stranded quotations to `UNDER_NEGOTIATION`. |
+
+The settle target is `APPROVED`, not `SENT`: `SENT` is only ever reached *from* `APPROVED`, so the
+quote was cleared once already, and the terms now on it either breach no ceiling (accepted) or are
+the ones that were cleared (declined). The customer reads "Ready for your confirmation", which is
+where the ball actually is. `UNDER_NEGOTIATION → SENT` isn't in `ALLOWED_TRANSITIONS` anyway.
+
+**The migration deliberately does not close the orphans.** An unanswered customer request is real
+work; marking it rejected would answer the customer on the rep's behalf. It moves the quotation to
+where that work is *visible* instead. Terminal statuses are excluded — an orphan under a `CONFIRMED`
+order is history, not work, and dragging a confirmed order back into negotiation would be worse than
+the inconsistency it fixes. Not reversible: the prior status is recorded nowhere, so an automatic
+reverse would guess between `SENT` and `APPROVED` and be wrong half the time.
+
+One direction of drift is left standing on purpose. A `COUNTERED` round keeps the quotation in the
+Negotiation column while the "awaiting you" badge reads zero — correct, because that round is the
+*customer's* move. The failure that was reported is the other direction: work waiting on you, on a
+deal the board doesn't show as negotiating. That can no longer happen.
+
+### `Negotiate` on the inbox row
+
+Accept and Reject were the row's whole vocabulary, but a counter-offer is the third answer and it
+doesn't fit in a table cell — it needs the thread, the line breakdown and a number. The new button
+opens `/quotations/{id}`, where `RepNegotiationPanel` already offers accept, counter and decline
+against the same endpoints the inbox posts to. No new decision path; the row just stops being a
+dead end for the one answer it couldn't express.
+
+### Regression caught in review: the two accept paths disagreed
+
+Flagged against the change above, and correct. `accept_request` (rep accepts the customer's ask)
+sets `order_discount_percent`. `accept_counter` (customer accepts the rep's counter) still looped
+`update_line`, stamping the counter onto every line — the exact bug `accept_request`'s own comment
+describes:
+
+- a line already at 18% was silently **cut** to a 12% counter, so the customer's haggling made their
+  own price worse;
+- flattening the per-line spread changed the blended risk score the deal is governed by, because
+  `recalculate` feeds line discounts and the order discount to `score_quotation` separately.
+
+The two paths differ only in *whose* number is applied, so they must apply it the same way.
+`accept_counter` now sets `order_discount_percent` too.
+
+`test_customer_accepting_our_counter_applies_our_number` had encoded the old behaviour — it asserted
+the line was rewritten to 12% — and was updated to assert the order discount plus an untouched line.
+`test_accepting_our_counter_never_cuts_a_deeper_line` is the new regression test: an 18% line, a 12%
+counter, and an assertion that the line is still 18% afterwards.
+
 ---
 
 ## 2. What this is NOT (scope decision)
@@ -672,9 +785,21 @@ rewrite of this.
 ## 3. Verification
 
 ```bash
-cd backend && python manage.py test apps      # 70 passed (31 accounts, 11 negotiation)
+cd backend && python manage.py test apps      # 90 passed (31 accounts, 31 negotiation)
 cd frontend && npm run build                  # all routes emitted
 ```
+
+Counts read back off the running API after the changes above, rather than off the screen:
+
+| Surface | Before | After |
+|---|---|---|
+| Sidebar *Quotations* badge | 7 | **10** |
+| Board cards (all columns) | 8 — `SENT` had no column | **10** |
+| Sidebar *Negotiations* badge | 1 | 1 |
+| Board *Negotiation* column | 0 | **1** — Q-1007, the deal that request is on |
+
+`GET /portal/internal/quotations/7/negotiation` returns `open_request` `#2` at `SUBMITTED`, so the
+rep panel renders Accept / Counter / Decline on the page the new **Negotiate** button opens.
 
 Full portal loop, live against `runserver`, with a business created through the admin UI:
 
@@ -753,7 +878,54 @@ self-contained.
 
 ---
 
-## 6. Migrations added by this lane
+## 6. The negotiation history is now an append-only log
+
+The timeline was **derived from each request's current status**, so a row could only ever show its
+latest state. Once a customer accepted our counter, the "we offered 12%" moment was overwritten by
+"accepted" and disappeared from the history. A negotiation the two sides remember differently is
+worse than no record at all.
+
+| File | Change |
+|---|---|
+| `apps/negotiation/models.py` | **New `NegotiationEvent`** — one row per move, never updated, never deleted. Carries kind, author type, a snapshotted author name, body, discount, delivery date and line. Ordered by `created_at, id` so two moves in the same transaction still read in the order they happened. |
+| `migrations/0005_negotiationevent` | The table. |
+| `migrations/0006_backfill_negotiation_events` | **Backfills from existing messages and requests**, preserving original timestamps — without it every conversation that already exists would render empty on both sides. |
+| `apps/negotiation/services.py` | Every action appends an event: sent, asked, countered, messaged, accepted, declined. `negotiation_timeline()` is now a straight read of the log; the old derivation is deleted. |
+| `components/negotiation/Thread.tsx` | Handles the new `SENT` / `CONFIRMED` kinds and defaults unknown ones, so a kind added on the backend renders plainly instead of crashing the thread. |
+
+Verified live — both sides return the identical sequence, including the counter that used to vanish:
+
+```
+17:03:33  REP       J. Rao        [SENT]             Quotation sent for your review.
+17:03:34  CUSTOMER  Seq Check Co  [COUNTER_REQUEST]  25%   Can you do 25%?
+17:03:35  REP       J. Rao        [REP_COUNTER]      12%   12% is our best on hardware.
+17:03:37  CUSTOMER  Seq Check Co  [MESSAGE]                Does that include setup?
+17:03:38  REP       J. Rao        [MESSAGE]                Yes, setup is included.
+17:03:39  CUSTOMER  Seq Check Co  [ACCEPTED]         12%   Accepted your offer.
+```
+
+The backfill also surfaced two things in existing data, both fixed: rows created before
+`counter_discount_percent` was nullable carry `0.00`, which would have rendered a plain acceptance
+as "Agreed at 0%"; and the rep panel was posting a "we've accepted your request" message on top of
+the ACCEPTED event, saying the same thing twice.
+
+### Finished actions no longer sit there looking live
+
+- **Portal:** Submit Request and Confirm Quotation stayed enabled even while a request was
+  unanswered — the server refuses that, so the customer only found out by clicking. Both are now
+  disabled with the reason shown. When there is nothing left to do the buttons are replaced by a
+  status panel rather than an empty space, which reads as finished instead of broken.
+- **Portal nav:** "My Quotation" was a dead `<span>`, so the only way back to the list was the
+  browser's back button. It is now a working link. "Messages" and "Profile" sat beside it as
+  decoration for screens that don't exist and were removed — a nav item that does nothing is worse
+  than one that isn't there.
+- **Sidebar:** removed **"Customer portal view"**. The portal is a customer's own surface, scoped
+  to the quotations *they* were sent; an internal user following that link either sees nothing or
+  reads a business's private view. Staff already see the whole conversation on the quotation itself.
+
+---
+
+## 7. Migrations added by this lane
 
 Anyone pulling this must run `python manage.py migrate`:
 
@@ -761,6 +933,8 @@ Anyone pulling this must run `python manage.py migrate`:
 |---|---|
 | `negotiation/0003_negotiationrequest_counter_discount_percent` | The rep's counter-offer. |
 | `negotiation/0004_alter_negotiationrequest_counter_discount_percent` | Makes it nullable — see bug 1 above. |
+| `negotiation/0005_negotiationevent` | The append-only negotiation log. |
+| `negotiation/0006_backfill_negotiation_events` | Reconstructs existing conversations into it. Data migration, reversible. |
 
 Business and user management deliberately needed **no** migration; they reuse `User.is_active`,
 `User.date_joined` and `Customer.portal_user`.

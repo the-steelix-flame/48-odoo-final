@@ -24,10 +24,6 @@ type NavItem = {
   labelByRole?: Partial<Record<Role, string>>;
 };
 
-/** Statuses that still want a human. A CONFIRMED quote is finished work, so
- *  counting it would make the badge grow forever and mean nothing. */
-const OPEN_QUOTE_STATUSES = ["DRAFT", "PENDING_APPROVAL", "APPROVED", "SENT", "UNDER_NEGOTIATION"];
-
 export function Sidebar() {
   const pathname = usePathname();
   const { role, logout } = useAuth();
@@ -45,10 +41,6 @@ export function Sidebar() {
   const { data: invoices } = useApi<{ unpaid: number }>("/billing/invoices/counts");
   const { data: health } = useApi<DealHealth>("/insights/deal-health");
 
-  const openQuotes = (quotations ?? []).filter((q) =>
-    OPEN_QUOTE_STATUSES.includes(q.status),
-  ).length;
-
   const NAV: NavItem[] = [
     {
       href: "/dashboard",
@@ -57,7 +49,10 @@ export function Sidebar() {
       // worklist, so it's named for what it does for them.
       labelByRole: { ADMIN: "Analytics" },
     },
-    { href: "/quotations", label: "Quotations", badge: openQuotes },
+    // Every quotation, matching the board one-for-one. This used to count only
+    // the open ones, so the sidebar said 7 above a board showing 8 cards with
+    // no way to tell which one it had left out.
+    { href: "/quotations", label: "Quotations", badge: quotations?.length },
     { href: "/approvals", label: "Approvals", badge: approvals?.pending },
     { href: "/negotiations", label: "Negotiations", badge: negotiations?.length },
     { href: "/fulfillment", label: "Fulfillment", badge: orders?.length },
@@ -154,12 +149,10 @@ export function Sidebar() {
             </Link>
           );
         })}
-        <Link
-          href="/portal"
-          className="flex items-center gap-[9px] rounded-[9px] p-[9px_10px] text-[13.5px] font-medium text-[#B7C4D4] transition hover:bg-white/10 hover:text-[#F8FAFC]"
-        >
-          Customer portal view
-        </Link>
+        {/* "Customer portal view" was removed. The portal is a customer's own
+            surface, scoped to the quotations THEY were sent; an internal user
+            following that link either sees nothing or, worse, reads a business's
+            private view. Staff already see everything on the quotation itself. */}
         <button
           onClick={logout}
           className="flex items-center gap-[9px] rounded-[9px] p-[9px_10px] text-left text-[13.5px] font-medium text-[#9CAABC] transition hover:text-red-600"

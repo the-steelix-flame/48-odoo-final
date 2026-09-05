@@ -238,7 +238,7 @@ export default function NegotiationInboxPage() {
                       </div>
                     </div>
                   ) : (
-                    <div className="flex gap-2">
+                    <div className="flex flex-wrap gap-2">
                       <Button
                         variant="success"
                         disabled={busyId === row.id}
@@ -248,6 +248,17 @@ export default function NegotiationInboxPage() {
                       </Button>
                       <Button variant="secondary" onClick={() => setRejecting(row.id)}>
                         Reject
+                      </Button>
+                      {/* Accept and Reject are the whole of this row's vocabulary,
+                          but a counter-offer is the third answer and there is no
+                          room for it in a table cell — it needs the thread, the
+                          line breakdown and a number. This opens the quotation,
+                          where the same accept/decline live alongside it. */}
+                      <Button
+                        variant="secondary"
+                        onClick={() => router.push(`/quotations/${row.quotation_id}`)}
+                      >
+                        Negotiate
                       </Button>
                     </div>
                   )}
