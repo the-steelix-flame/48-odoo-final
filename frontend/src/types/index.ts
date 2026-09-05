@@ -587,7 +587,14 @@ export interface PortalLine {
  * neither side can be looking at a different story.
  */
 export interface TimelineEntry {
-  kind: "MESSAGE" | "COUNTER_REQUEST" | "REP_COUNTER" | "ACCEPTED" | "REJECTED";
+  kind:
+    | "MESSAGE"
+    | "COUNTER_REQUEST"
+    | "REP_COUNTER"
+    | "ACCEPTED"
+    | "REJECTED"
+    | "SENT"
+    | "CONFIRMED";
   author_type: "CUSTOMER" | "REP";
   author_name: string;
   body: string;

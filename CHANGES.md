@@ -781,7 +781,54 @@ self-contained.
 
 ---
 
-## 6. Migrations added by this lane
+## 6. The negotiation history is now an append-only log
+
+The timeline was **derived from each request's current status**, so a row could only ever show its
+latest state. Once a customer accepted our counter, the "we offered 12%" moment was overwritten by
+"accepted" and disappeared from the history. A negotiation the two sides remember differently is
+worse than no record at all.
+
+| File | Change |
+|---|---|
+| `apps/negotiation/models.py` | **New `NegotiationEvent`** — one row per move, never updated, never deleted. Carries kind, author type, a snapshotted author name, body, discount, delivery date and line. Ordered by `created_at, id` so two moves in the same transaction still read in the order they happened. |
+| `migrations/0005_negotiationevent` | The table. |
+| `migrations/0006_backfill_negotiation_events` | **Backfills from existing messages and requests**, preserving original timestamps — without it every conversation that already exists would render empty on both sides. |
+| `apps/negotiation/services.py` | Every action appends an event: sent, asked, countered, messaged, accepted, declined. `negotiation_timeline()` is now a straight read of the log; the old derivation is deleted. |
+| `components/negotiation/Thread.tsx` | Handles the new `SENT` / `CONFIRMED` kinds and defaults unknown ones, so a kind added on the backend renders plainly instead of crashing the thread. |
+
+Verified live — both sides return the identical sequence, including the counter that used to vanish:
+
+```
+17:03:33  REP       J. Rao        [SENT]             Quotation sent for your review.
+17:03:34  CUSTOMER  Seq Check Co  [COUNTER_REQUEST]  25%   Can you do 25%?
+17:03:35  REP       J. Rao        [REP_COUNTER]      12%   12% is our best on hardware.
+17:03:37  CUSTOMER  Seq Check Co  [MESSAGE]                Does that include setup?
+17:03:38  REP       J. Rao        [MESSAGE]                Yes, setup is included.
+17:03:39  CUSTOMER  Seq Check Co  [ACCEPTED]         12%   Accepted your offer.
+```
+
+The backfill also surfaced two things in existing data, both fixed: rows created before
+`counter_discount_percent` was nullable carry `0.00`, which would have rendered a plain acceptance
+as "Agreed at 0%"; and the rep panel was posting a "we've accepted your request" message on top of
+the ACCEPTED event, saying the same thing twice.
+
+### Finished actions no longer sit there looking live
+
+- **Portal:** Submit Request and Confirm Quotation stayed enabled even while a request was
+  unanswered — the server refuses that, so the customer only found out by clicking. Both are now
+  disabled with the reason shown. When there is nothing left to do the buttons are replaced by a
+  status panel rather than an empty space, which reads as finished instead of broken.
+- **Portal nav:** "My Quotation" was a dead `<span>`, so the only way back to the list was the
+  browser's back button. It is now a working link. "Messages" and "Profile" sat beside it as
+  decoration for screens that don't exist and were removed — a nav item that does nothing is worse
+  than one that isn't there.
+- **Sidebar:** removed **"Customer portal view"**. The portal is a customer's own surface, scoped
+  to the quotations *they* were sent; an internal user following that link either sees nothing or
+  reads a business's private view. Staff already see the whole conversation on the quotation itself.
+
+---
+
+## 7. Migrations added by this lane
 
 Anyone pulling this must run `python manage.py migrate`:
 
@@ -789,6 +836,8 @@ Anyone pulling this must run `python manage.py migrate`:
 |---|---|
 | `negotiation/0003_negotiationrequest_counter_discount_percent` | The rep's counter-offer. |
 | `negotiation/0004_alter_negotiationrequest_counter_discount_percent` | Makes it nullable — see bug 1 above. |
+| `negotiation/0005_negotiationevent` | The append-only negotiation log. |
+| `negotiation/0006_backfill_negotiation_events` | Reconstructs existing conversations into it. Data migration, reversible. |
 
 Business and user management deliberately needed **no** migration; they reuse `User.is_active`,
 `User.date_joined` and `Customer.portal_user`.
