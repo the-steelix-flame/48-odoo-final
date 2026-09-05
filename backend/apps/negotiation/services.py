@@ -202,6 +202,37 @@ def negotiation_timeline(quotation: Quotation) -> list[dict]:
     ]
 
 
+def _order_percent_for_effective(quotation: Quotation, target_percent: Decimal) -> Decimal:
+    """Turn an agreed headline discount into the order-level percentage.
+
+    A negotiated number is what the customer thinks they are getting off the
+    list price. Writing it straight onto `order_discount_percent` compounds it
+    with whatever the lines already carry: an 8% line plus an agreed 12% came
+    out at 19.04%, and the portal duly displayed "19.0%" on a deal the customer
+    had accepted at 12. They were being handed margin nobody agreed to give.
+
+        subtotal S, line total after line discounts N
+        already off = S - N
+        we need     = target% of S
+        order% = (target%·S - (S - N)) / N
+
+    Returns 0 when the line discounts already meet or exceed the target - the
+    customer is getting at least what was agreed, and a negative order discount
+    would silently claw money back.
+    """
+    subtotal = Decimal(quotation.subtotal or 0)
+    net_after_lines = sum(
+        (Decimal(line.line_total) for line in quotation.lines.all()), Decimal("0")
+    )
+    if subtotal <= 0 or net_after_lines <= 0:
+        return Decimal("0")
+    already_off = subtotal - net_after_lines
+    still_needed = subtotal * target_percent / Decimal("100") - already_off
+    if still_needed <= 0:
+        return Decimal("0")
+    return (still_needed / net_after_lines * Decimal("100")).quantize(Decimal("0.01"))
+
+
 def open_request_for(quotation: Quotation) -> NegotiationRequest | None:
     """The round currently awaiting a reply, if any."""
     return (
@@ -333,8 +364,16 @@ def accept_counter(request: NegotiationRequest, *, actor) -> Quotation:
     # blended risk score the deal is governed by. The two accept paths differ
     # only in whose number is applied — the customer's ask here, the rep's
     # counter there — so they must apply it the same way.
-    quotation.order_discount_percent = request.counter_discount_percent
-    quotation.save(update_fields=["order_discount_percent", "updated_at"])
+    quotation.order_discount_percent = _order_percent_for_effective(
+        quotation, Decimal(request.counter_discount_percent)
+    )
+    # The customer has committed. If the agreed terms turn out to need approval,
+    # the approvers are the only ones left to decide — see approvals/services.py,
+    # which confirms rather than bouncing it back for a second yes.
+    quotation.customer_accepted_at = timezone.now()
+    quotation.save(
+        update_fields=["order_discount_percent", "customer_accepted_at", "updated_at"]
+    )
 
     # `requested_discount_percent` is deliberately left alone. It records what
     # the customer ASKED for; overwriting it with what they settled for would
@@ -564,7 +603,9 @@ def accept_request(request: NegotiationRequest, *, actor) -> Quotation:
         # per-line discount structure the blended risk score is computed from.
         # recalculate() apportions the order discount down to the lines before
         # scoring, so ceilings are still enforced line by line.
-        quotation.order_discount_percent = request.requested_discount_percent
+        quotation.order_discount_percent = _order_percent_for_effective(
+            quotation, Decimal(request.requested_discount_percent)
+        )
         quotation.save(update_fields=["order_discount_percent", "updated_at"])
 
     request.status = NegotiationRequestStatus.ACCEPTED

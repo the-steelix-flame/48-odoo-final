@@ -95,6 +95,17 @@ def act(
         quotation_services.record_event(
             quotation, QuotationEventType.APPROVED, actor=actor, note=note, final=True
         )
+
+        # If the customer already accepted these terms, approval was the last
+        # outstanding decision and the order is agreed on both sides. Leaving it
+        # at APPROVED sent them back to the portal to confirm something they had
+        # committed to before it ever reached an approver.
+        #
+        # Only where they committed: customer_accepted_at is set solely by
+        # accept_counter. A quote that merely passed through approval normally is
+        # still SENT to the customer and confirmed by them, as it should be.
+        if quotation.customer_accepted_at is not None:
+            quotation_services.confirm(quotation, actor=actor)
         return request
 
     if decision == ApprovalStatus.REJECTED:

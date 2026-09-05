@@ -25,6 +25,19 @@ from apps.negotiation import services as negotiation
 from apps.quotations import services as quotations
 
 
+def _effective_discount(quotation) -> Decimal:
+    """What the customer actually gets off list, to two places.
+
+    Line discounts and the order discount compound, so neither field alone
+    answers "what did we agree?". This is the number the portal shows.
+    """
+    if not quotation.subtotal:
+        return Decimal("0.00")
+    return (
+        Decimal(quotation.discount_total) / Decimal(quotation.subtotal) * Decimal("100")
+    ).quantize(Decimal("0.01"))
+
+
 class PortalTestBase(TestCase):
     def setUp(self):
         self.rep = User.objects.create_user(
@@ -290,9 +303,11 @@ class NegotiationThreadTests(PortalTestBase):
         negotiation.accept_counter(request, actor=self.buyer)
 
         quotation.refresh_from_db()
-        # Our 12%, not their 25% — and as an ORDER discount, exactly as when the
-        # rep accepts the customer's ask. The per-line figures are untouched.
-        self.assertEqual(quotation.order_discount_percent, Decimal("12.00"))
+        # Our 12%, not their 25%, and 12% is what they actually get. The order
+        # discount is DERIVED, not copied: written straight onto the field it
+        # would compound with the line discount and hand over ~19%. What the
+        # customer agreed to is the headline figure, so that is what is asserted.
+        self.assertEqual(_effective_discount(quotation), Decimal("12.00"))
         self.assertEqual(quotation.lines.first().discount_percent, before)
         request.refresh_from_db()
         self.assertEqual(request.status, "ACCEPTED")
@@ -324,7 +339,11 @@ class NegotiationThreadTests(PortalTestBase):
 
         quotation.refresh_from_db()
         self.assertEqual(quotation.lines.first().discount_percent, Decimal("18.00"))
-        self.assertEqual(quotation.order_discount_percent, Decimal("12.00"))
+        # The line is already deeper than the 12% agreed, so no order discount is
+        # added — and none is clawed back either. The customer keeps the better
+        # of the two; a negotiation never makes their price worse.
+        self.assertEqual(quotation.order_discount_percent, Decimal("0.00"))
+        self.assertEqual(_effective_discount(quotation), Decimal("18.00"))
 
     def test_accepting_our_counter_still_triggers_re_approval(self):
         """The re-approval tail must not depend on WHO agreed."""

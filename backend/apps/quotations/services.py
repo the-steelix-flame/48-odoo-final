@@ -61,6 +61,11 @@ ALLOWED_TRANSITIONS: dict[str, set[str]] = {
     },
     QuotationStatus.SENT: {
         QuotationStatus.UNDER_NEGOTIATION,
+        # A sent quote whose terms now breach a ceiling has to be able to go
+        # back for approval. Without this the customer pressed Accept and got
+        # "Cannot move a quotation from SENT to PENDING_APPROVAL" — the guard
+        # firing correctly on a route that simply did not exist.
+        QuotationStatus.PENDING_APPROVAL,
         QuotationStatus.CONFIRMED,
         QuotationStatus.REJECTED,
         QuotationStatus.CANCELLED,
