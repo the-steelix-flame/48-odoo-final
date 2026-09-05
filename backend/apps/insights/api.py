@@ -45,6 +45,14 @@ class AlertOut(Schema):
     message: str
     status: str
     detected_at: datetime
+    #: Where the deal actually is. Screen 14 listed at-risk deals with no
+    #: indication of what stage they were stuck at, so "idle 9 days" gave no
+    #: clue whether it was waiting on a rep, an approver, or the customer.
+    quotation_status: str
+    #: The approval request to open, when one exists. Lets a manager jump
+    #: straight to the decision instead of hunting for it in the approvals list.
+    approval_request_id: int | None = None
+    risk_band: str
 
     @staticmethod
     def resolve_quotation_number(obj) -> str:
@@ -53,6 +61,25 @@ class AlertOut(Schema):
     @staticmethod
     def resolve_customer_name(obj) -> str:
         return obj.quotation.customer.name
+
+    @staticmethod
+    def resolve_quotation_status(obj) -> str:
+        return obj.quotation.status
+
+    @staticmethod
+    def resolve_risk_band(obj) -> str:
+        return obj.quotation.risk_band
+
+    @staticmethod
+    def resolve_approval_request_id(obj) -> int | None:
+        """Prefer the request still awaiting a decision; fall back to the latest."""
+        from apps.approvals.models import ApprovalRequest
+        from apps.common.enums import ApprovalStatus
+
+        requests = ApprovalRequest.objects.filter(quotation_id=obj.quotation_id)
+        pending = requests.filter(status=ApprovalStatus.PENDING).order_by("-created_at").first()
+        chosen = pending or requests.order_by("-created_at").first()
+        return chosen.id if chosen else None
 
 
 class DealHealthOut(Schema):
@@ -118,7 +145,7 @@ def deal_health(request):
     counts = run_sweep()
     alerts = DealAlert.objects.filter(status=AlertStatus.OPEN).select_related(
         "quotation", "quotation__customer"
-    )
+    ).order_by("-detected_at")
     return {
         "stalled_count": counts["stalled"],
         "anomaly_count": counts["anomalies"],
