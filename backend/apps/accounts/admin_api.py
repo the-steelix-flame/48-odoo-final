@@ -9,6 +9,7 @@ live in `accounts/api.py`.
 """
 
 from datetime import datetime
+from decimal import Decimal
 
 from ninja import Router, Schema
 
@@ -440,6 +441,12 @@ class CreatePlanIn(Schema):
     refund_mode: str = "PRORATED"
     bill_in_advance: bool = True
     is_active: bool = True
+
+    #: The plan's own product is created from these. Without a price the plan
+    #: has nothing sellable behind it, so it can never reach a quotation or the
+    #: upsell panel. Null skips it, for repointing an existing product instead.
+    list_price: Decimal | None = None
+    cost_price: Decimal | None = None
 
 
 class UpdatePlanIn(Schema):

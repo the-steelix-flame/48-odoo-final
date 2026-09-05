@@ -129,9 +129,10 @@ class Command(BaseCommand):
     def _plans(self) -> dict:
         plans = {}
         for name, interval in [
-            ("Monthly Plan", RecurringInterval.MONTHLY),
-            ("Quarterly Plan", RecurringInterval.QUARTERLY),
-            ("Yearly Plan", RecurringInterval.YEARLY),
+            ("Monthly Care Service", RecurringInterval.MONTHLY),
+            ("Quarterly Support Service", RecurringInterval.QUARTERLY),
+            ("Annual Maintenance Service", RecurringInterval.YEARLY),
+            ("Aftercare Service", RecurringInterval.BIENNIAL),
         ]:
             plans[interval], _ = RecurringPlan.objects.get_or_create(
                 name=name,
@@ -152,10 +153,16 @@ class Command(BaseCommand):
             ("HW-DOCK", "Docking Station", "HARDWARE", 180, 110, 15, False, None, True),
             ("HW-MOUSE", "Wireless Mouse", "HARDWARE", 45, 22, 15, False, None, False),
             ("HW-WARR", "Extended Warranty", "HARDWARE", 180, 60, 15, False, None, False),
+            ("HW-PROJ", "Projector", "HARDWARE", 640, 390, 15, False, None, True),
+            ("HW-PRINT", "Printer", "HARDWARE", 320, 190, 15, False, None, False),
+            ("HW-KEYB", "Keyboard", "HARDWARE", 70, 32, 15, False, None, False),
+            ("HW-PAD", "Mousepad", "HARDWARE", 15, 5, 15, False, None, False),
             ("SV-SETUP", "Onsite Setup Service", "SERVICES", 450, 300, 10, False, None, False),
             ("SV-TRAIN", "Training Workshop", "SERVICES", 800, 500, 10, False, None, False),
-            ("SB-CARE2", "Care Plan 2yr", "SUBSCRIPTION", 46, 18, 0, True, RecurringInterval.MONTHLY, True),
+            ("SB-CARE2", "Device Care Plan", "SUBSCRIPTION", 46, 18, 0, True, RecurringInterval.MONTHLY, True),
             ("SB-SLA", "Support SLA", "SUBSCRIPTION", 300, 140, 0, True, RecurringInterval.QUARTERLY, False),
+            ("SB-MAINT", "Annual Maintenance", "SUBSCRIPTION", 900, 400, 0, True, RecurringInterval.YEARLY, False),
+            ("SB-AFTER", "Aftercare Service", "SUBSCRIPTION", 1400, 520, 0, True, RecurringInterval.BIENNIAL, True),
         ]
         products = {}
         for sku, name, cat, price, cost, tax, is_sub, plan_key, promoted in specs:
@@ -331,6 +338,14 @@ class Command(BaseCommand):
             ("HW-DOCK", "HW-MOUSE", "0.61"),
             ("SV-SETUP", "SV-TRAIN", "0.58"),
             ("SV-SETUP", "SB-SLA", "0.52"),
+            # Desk-setup cluster. A keyboard sells a mousepad far more reliably
+            # than a laptop sells a projector, and the scores say so.
+            ("HW-KEYB", "HW-PAD", "0.79"),
+            ("HW-LAP14", "HW-KEYB", "0.66"),
+            ("HW-DOCK", "HW-KEYB", "0.57"),
+            ("HW-PROJ", "SV-SETUP", "0.63"),
+            ("HW-PRINT", "SV-SETUP", "0.49"),
+            ("HW-LAP14", "HW-PROJ", "0.31"),
         ]
         for source, target, score in pairs:
             ProductPairing.objects.get_or_create(

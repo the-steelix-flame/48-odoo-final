@@ -22,6 +22,9 @@ them only ever affects future events — allowed.
 
 from __future__ import annotations
 
+import re
+from decimal import Decimal
+
 from django.db import transaction
 from django.db.models import Count, Q, QuerySet
 
@@ -34,6 +37,7 @@ from apps.common.enums import (
     SubscriptionStatus,
 )
 from apps.common.errors import NotFound, ValidationError
+from apps.catalog.models import Product, ProductCategory
 from apps.subscriptions.models import RecurringPlan
 
 #: Matches `RecurringPlan.name`'s column width. Checked here so the admin gets
@@ -135,9 +139,22 @@ def create_plan(
     refund_mode: str = RefundMode.PRORATED,
     bill_in_advance: bool = True,
     is_active: bool = True,
+    list_price: Decimal | None = None,
+    cost_price: Decimal | None = None,
     actor: User | None = None,
 ) -> RecurringPlan:
-    """Define a new billing policy. Available to reps the moment it is active."""
+    """Define a new billing policy, and the product that sells it.
+
+    A plan on its own cannot be sold. `QuotationLine.product` is a required
+    foreign key, so a policy with no product behind it can never go on a
+    quotation, never be suggested in the upsell panel, and never become a
+    subscription — it just sits in the list looking available. Creating the
+    companion product here is what makes "add a plan" mean "add something a rep
+    can actually sell".
+
+    Pass `list_price=None` to skip it, for the rare case where an existing
+    product is going to be repointed at this plan instead.
+    """
     plan = RecurringPlan.objects.create(
         name=_clean_name(name),
         interval=_clean_policy("interval", interval),
@@ -147,7 +164,62 @@ def create_plan(
         bill_in_advance=bill_in_advance,
         is_active=is_active,
     )
+    if list_price is not None:
+        create_companion_product(plan, list_price=list_price, cost_price=cost_price)
     return get_plan(plan.pk)
+
+
+#: Where a plan's own product lands. Subscriptions are their own category so
+#: the discount ceiling on hardware never silently governs a billing policy.
+SUBSCRIPTION_CATEGORY_CODE = "SUBSCRIPTION"
+
+
+def _subscription_category() -> ProductCategory:
+    category = ProductCategory.objects.filter(code=SUBSCRIPTION_CATEGORY_CODE).first()
+    if category is None:
+        raise ValidationError(
+            "There is no Subscription product category to file this plan under. "
+            "Run `manage.py seed_demo`, or create the category first."
+        )
+    return category
+
+
+def _unique_sku(plan: RecurringPlan) -> str:
+    """SB-<slug of the plan name>, with a numeric suffix only if it collides."""
+    base = re.sub(r"[^A-Z0-9]+", "-", plan.name.upper()).strip("-")[:40] or "PLAN"
+    candidate = f"SB-{base}"
+    suffix = 2
+    while Product.objects.filter(sku=candidate).exists():
+        candidate = f"SB-{base}-{suffix}"
+        suffix += 1
+    return candidate
+
+
+@transaction.atomic
+def create_companion_product(
+    plan: RecurringPlan, *, list_price: Decimal, cost_price: Decimal | None = None
+) -> Product:
+    """The sellable half of a plan."""
+    if list_price is None or Decimal(list_price) <= 0:
+        raise ValidationError("A plan's product needs a list price above zero")
+    cost = Decimal(cost_price) if cost_price is not None else Decimal(list_price) * Decimal("0.4")
+    if cost >= Decimal(list_price):
+        raise ValidationError(
+            "Cost price must be below the list price, or every quote carrying "
+            "this plan books a loss."
+        )
+    return Product.objects.create(
+        name=plan.name,
+        sku=_unique_sku(plan),
+        category=_subscription_category(),
+        base_price=Decimal(list_price),
+        cost_price=cost,
+        tax_percent=Decimal("0"),
+        unit="Recurring",
+        is_subscription=True,
+        recurring_plan=plan,
+        is_active=plan.is_active,
+    )
 
 
 @transaction.atomic

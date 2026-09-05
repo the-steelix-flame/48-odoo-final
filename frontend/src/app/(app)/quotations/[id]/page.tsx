@@ -591,6 +591,14 @@ export default function QuotationBuilderPage({ params }: { params: Promise<{ id:
                         <p className="mt-0.5 text-xs text-emerald-600">
                           Margin +{money(suggestion.margin_delta)}
                         </p>
+                        {/* A recurring add-on commits the customer to a
+                            billing cadence, not just a one-off charge. Say
+                            which one before the rep clicks Add. */}
+                        {suggestion.plan_label && (
+                          <p className="mt-0.5 text-xs text-[#64748B]">
+                            Recurring · {suggestion.plan_label}
+                          </p>
+                        )}
                       </div>
                       {suggestion.is_promoted && <Badge tone="blue">Promo</Badge>}
                     </div>

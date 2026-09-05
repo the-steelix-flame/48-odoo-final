@@ -34,7 +34,12 @@ export type SubscriptionStatus = "ACTIVE" | "PAUSED" | "CANCELLED";
 // mirror `RecurringInterval`, `ProrationMode`, `CancellationPolicy` and
 // `RefundMode` in `common/enums.py`; `RecurringPlanT` predates them and still
 // types these as plain strings, which is why plan admin uses `AdminPlan`.
-export type RecurringInterval = "WEEKLY" | "MONTHLY" | "QUARTERLY" | "YEARLY";
+export type RecurringInterval =
+  | "WEEKLY"
+  | "MONTHLY"
+  | "QUARTERLY"
+  | "YEARLY"
+  | "BIENNIAL";
 export type ProrationMode = "DAILY" | "NONE" | "FULL_PERIOD";
 export type CancellationPolicy = "IMMEDIATE" | "END_OF_PERIOD";
 export type RefundMode = "PRORATED" | "NONE";
@@ -270,6 +275,9 @@ export interface UpsellSuggestion {
   score: number;
   is_promoted: boolean;
   promo_label?: string | null;
+  /** "Every 2 years" etc. Present only on recurring suggestions, so a rep can
+   *  see the commitment before adding it to the quote. */
+  plan_label?: string | null;
 }
 
 // ---------------------------------------------------------------- governance
