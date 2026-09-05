@@ -157,6 +157,37 @@ changed, no behaviour change on the list paths.
 **Verified:** all 30 GET endpoints return 200, portal correctly 403s a non-customer, role
 enforcement returns 403 for a REP on a Finance-only mutation, `test apps` 28/28.
 
+### 2.1c ✅ FIXED — deal-health alerts were never resolved (screen 14)
+
+Spotted from the UI: Q-1004 (Zenith Co) sat in the **Confirmed** kanban column while screen 14
+still listed it as `Idle 9 days — Stalled`. Two separate defects behind it.
+
+**Defect 1 — nothing ever closed an alert.** `ACTIVE_STATUSES` correctly excludes `CONFIRMED`, so
+a fresh sweep no longer *finds* Q-1004. But no code path ever set `resolved_at` or moved an alert
+off `OPEN`. Once raised, an alert stayed open forever, even after the deal was confirmed, rejected
+or revived. `DealAlert.resolved_at` existed and was never written to.
+
+**Defect 2 — the stat cards and the table were counting different things.** `run_sweep()` returned
+the number of alerts *found on that run*, while the table below rendered *every OPEN alert*. So the
+card read `STALLED DEALS 0` directly above a row showing a stalled deal — visibly contradicting
+itself in the same screenshot.
+
+*Fix:* each `_sweep_*` now returns the set of quotations that qualify **right now**;
+`_resolve_cleared()` marks any `OPEN`/`ACKNOWLEDGED` alert of that type whose quotation is no longer
+in that set as `RESOLVED` with a timestamp; and `run_sweep()` returns counts of what is genuinely
+`OPEN`, so the cards can never disagree with the table again.
+
+*Verified:* Q-1004's alert moved `OPEN → RESOLVED`, cards and table both read 0, and an assertion
+now guarantees no `CONFIRMED` quotation can be listed as stalled. `test apps` 28/28.
+
+**Not a bug — the related question this came from.** The Approvals page showed Q-1002 as *Approved*
+while the kanban showed nothing in its *Approved* column. That is correct: they render **two
+different objects**. `ApprovalRequest.status` is `APPROVED` (that request was granted, and it stays
+in the approvals history), while `Quotation.status` has since moved on to `CONFIRMED`. The kanban
+groups by quotation status, so the quote appears under Confirmed. The Approvals screen is a history
+of approval requests — per the brief, "every quotation that needed, needs, or is going through
+discount approval" — not a mirror of the pipeline.
+
 ### 2.2 🟡 `DEBUG=True` leaks full tracebacks over HTTP
 
 The 500 above returned a complete traceback including absolute filesystem paths

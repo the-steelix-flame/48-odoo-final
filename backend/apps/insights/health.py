@@ -37,16 +37,48 @@ ANOMALY_WINDOW_DAYS = 90
 @transaction.atomic
 def run_sweep() -> dict:
     config = DealHealthConfig.get_solo()
+
+    # Each sweep returns the quotations that qualify RIGHT NOW.
+    live = {
+        AlertType.STALLED: _sweep_stalled(config),
+        AlertType.DISCOUNT_ANOMALY: _sweep_discount_anomalies(config),
+        AlertType.DELIVERY_SLIPPAGE: _sweep_delivery_slippage(config),
+    }
+    for alert_type, quotation_ids in live.items():
+        _resolve_cleared(alert_type, quotation_ids)
+
+    # Count what is actually OPEN, not what this run happened to find. A deal
+    # flagged yesterday that is still stalled today must keep counting, and one
+    # whose condition has cleared must stop — otherwise the three stat cards
+    # disagree with the alert table directly underneath them.
+    open_alerts = DealAlert.objects.filter(status=AlertStatus.OPEN)
     return {
-        "stalled": _sweep_stalled(config),
-        "anomalies": _sweep_discount_anomalies(config),
-        "slippage": _sweep_delivery_slippage(config),
+        "stalled": open_alerts.filter(alert_type=AlertType.STALLED).count(),
+        "anomalies": open_alerts.filter(alert_type=AlertType.DISCOUNT_ANOMALY).count(),
+        "slippage": open_alerts.filter(alert_type=AlertType.DELIVERY_SLIPPAGE).count(),
     }
 
 
-def _sweep_stalled(config: DealHealthConfig) -> int:
+def _resolve_cleared(alert_type: str, live_quotation_ids: set[int]) -> int:
+    """Close alerts whose condition no longer holds.
+
+    Nothing did this before. A quotation that went stalled and was then
+    confirmed kept its STALLED alert open forever, so screen 14 listed a
+    CONFIRMED deal as at-risk while the card above it correctly said zero.
+    """
+    return (
+        DealAlert.objects.filter(
+            alert_type=alert_type,
+            status__in=[AlertStatus.OPEN, AlertStatus.ACKNOWLEDGED],
+        )
+        .exclude(quotation_id__in=live_quotation_ids)
+        .update(status=AlertStatus.RESOLVED, resolved_at=timezone.now())
+    )
+
+
+def _sweep_stalled(config: DealHealthConfig) -> set[int]:
     cutoff = timezone.now() - timedelta(days=config.stalled_days_threshold)
-    found = 0
+    flagged: set[int] = set()
     for quotation in Quotation.objects.filter(
         status__in=ACTIVE_STATUSES, last_activity_at__lt=cutoff
     ):
@@ -61,13 +93,13 @@ def _sweep_stalled(config: DealHealthConfig) -> int:
         _upsert_alert(
             quotation, AlertType.STALLED, severity, f"Idle {idle} days"
         )
-        found += 1
-    return found
+        flagged.add(quotation.id)
+    return flagged
 
 
-def _sweep_discount_anomalies(config: DealHealthConfig) -> int:
+def _sweep_discount_anomalies(config: DealHealthConfig) -> set[int]:
     stats = _refresh_rep_stats()
-    found = 0
+    flagged: set[int] = set()
     for quotation in Quotation.objects.filter(status__in=ACTIVE_STATUSES).select_related(
         "owner_rep"
     ):
@@ -86,16 +118,16 @@ def _sweep_discount_anomalies(config: DealHealthConfig) -> int:
                 AlertSeverity.HIGH if effective > average * 3 else AlertSeverity.MEDIUM,
                 f"Discount {effective:.0f}% vs avg {average:.0f}%",
             )
-            found += 1
-    return found
+            flagged.add(quotation.id)
+    return flagged
 
 
-def _sweep_delivery_slippage(config: DealHealthConfig) -> int:
+def _sweep_delivery_slippage(config: DealHealthConfig) -> set[int]:
     from apps.fulfillment.models import FulfillmentAllocation
 
     today = timezone.now().date()
     grace = timedelta(days=config.slippage_grace_days)
-    found = 0
+    flagged: set[int] = set()
     late = FulfillmentAllocation.objects.filter(
         shipped_at__isnull=True, promised_date__isnull=False, promised_date__lt=today - grace
     ).select_related("plan__quotation")
@@ -108,8 +140,8 @@ def _sweep_delivery_slippage(config: DealHealthConfig) -> int:
             AlertSeverity.HIGH if days_late > 7 else AlertSeverity.MEDIUM,
             f"Promise date passed by {days_late} days",
         )
-        found += 1
-    return found
+        flagged.add(alloc.plan.quotation_id)
+    return flagged
 
 
 def _effective_discount(quotation: Quotation) -> Decimal:
