@@ -26,6 +26,7 @@ import {
   Table,
   inputClass,
 } from "@/components/ui";
+import { useAuth } from "@/lib/auth";
 import { RISK_TONE, dateTime, percent, titleCase } from "@/lib/format";
 import { useApi } from "@/lib/useApi";
 import type { ApprovalDetail } from "@/types";
@@ -40,6 +41,7 @@ const STEP_TONE: Record<string, string> = {
 
 export default function ApprovalDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
+  const { user, role } = useAuth();
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -68,6 +70,22 @@ export default function ApprovalDetailPage({ params }: { params: Promise<{ id: s
   }
 
   const isOpen = data.status === "PENDING";
+
+  // The decision panel used to render for anyone who could open the page. A
+  // Sales Rep saw Approve/Reject, and an approver who had already signed off
+  // still saw them on the step that had moved past them — both only failed on
+  // the server, after the click, as "This step requires role X".
+  const currentStep = data.steps.find((step) => step.status === "PENDING") ?? null;
+  const myName = user ? user.full_name || user.email : null;
+  const myStep =
+    data.steps.find((step) => step.acted_by_name && myName && step.acted_by_name === myName) ??
+    null;
+  /** Mirrors `act()`: the caller must hold the CURRENT step's role. ADMIN may act on any step. */
+  const canDecide =
+    isOpen && currentStep !== null && role !== null &&
+    (role === currentStep.role_required || role === "ADMIN");
+  /** Is this role ever an approver on this chain at all? A Sales Rep never is. */
+  const isApprover = role !== null && (role === "ADMIN" || data.chain.includes(role));
 
   return (
     <>
@@ -184,7 +202,36 @@ export default function ApprovalDetailPage({ params }: { params: Promise<{ id: s
             </ol>
           </Card>
 
-          {isOpen ? (
+          {isOpen && !canDecide ? (
+            <Card title={isApprover ? "Waiting on someone else" : "Not authorised"}>
+              {myStep ? (
+                <p className="text-sm text-[#475569]">
+                  You already <strong>{titleCase(myStep.status)}</strong> this on{" "}
+                  {dateTime(myStep.acted_at)}. It has moved to{" "}
+                  <strong>{titleCase(currentStep!.role_required)}</strong> and there is nothing
+                  further for you to do here.
+                </p>
+              ) : isApprover ? (
+                <p className="text-sm text-[#475569]">
+                  This request is with <strong>{titleCase(currentStep!.role_required)}</strong>
+                  {currentStep!.assignee_name ? ` (${currentStep!.assignee_name})` : ""}. Steps are
+                  decided in order, so you cannot act ahead of them.
+                </p>
+              ) : (
+                <p className="text-sm text-[#475569]">
+                  You do not have permission to decide this approval. Discount approvals are
+                  decided by <strong>Sales Manager</strong> and <strong>Finance</strong> only — a
+                  Sales Rep can see why a quote was flagged, but cannot approve their own discount.
+                </p>
+              )}
+              <div className="mt-3">
+                <Note>
+                  The same rule is enforced on the server, so hiding these buttons changes what you
+                  see, not what you are allowed to do.
+                </Note>
+              </div>
+            </Card>
+          ) : isOpen ? (
             <Card title="Your decision">
               <Field
                 label="Reason"
