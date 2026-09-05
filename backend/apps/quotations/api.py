@@ -10,6 +10,7 @@ from apps.accounts.auth import internal_auth
 from apps.accounts.models import Customer
 from apps.catalog.models import PriceList, UpsellSuggestionLog
 from apps.catalog.schemas import UpsellSuggestionOut
+from apps.common.enums import QuotationEventType
 from apps.common.errors import NotFound
 from apps.quotations import services
 from apps.quotations.models import Quotation
@@ -139,9 +140,19 @@ def remove_line(request, quotation_id: int, line_id: int):
 @router.patch("/{quotation_id}/order-discount", response=QuotationDetailOut)
 def set_order_discount(request, quotation_id: int, payload: OrderDiscountIn):
     quotation = _get(quotation_id)
+    # Line edits go through _assert_editable; this path did not, so a rep could
+    # move the order-level discount while the quote sat in PENDING_APPROVAL and
+    # an approver would decide on terms that had already changed underneath them.
+    services.assert_editable(quotation)
     quotation.order_discount_percent = payload.order_discount_percent
     quotation.save(update_fields=["order_discount_percent", "updated_at"])
     services.recalculate(quotation)
+    services.record_event(
+        quotation,
+        QuotationEventType.DISCOUNT_CHANGED,
+        actor=request.auth,
+        order_discount_percent=str(payload.order_discount_percent),
+    )
     return _detail(quotation)
 
 

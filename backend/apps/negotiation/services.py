@@ -141,13 +141,15 @@ def accept_request(request: NegotiationRequest, *, actor) -> Quotation:
         raise ValidationError("This request has already been resolved")
 
     if request.requested_discount_percent is not None:
-        for line in quotation.lines.all():
-            quotation_services.update_line(
-                quotation,
-                line.id,
-                discount_percent=request.requested_discount_percent,
-                actor=actor,
-            )
+        # The portal offers ONE "Counter Discount %" field, so the counter is an
+        # ORDER-level ask, not a per-line one. Setting it here (rather than
+        # stamping every line) matters twice over: it stops a 12% counter from
+        # silently cutting a line that was already at 18%, and it preserves the
+        # per-line discount structure the blended risk score is computed from.
+        # recalculate() apportions the order discount down to the lines before
+        # scoring, so ceilings are still enforced line by line.
+        quotation.order_discount_percent = request.requested_discount_percent
+        quotation.save(update_fields=["order_discount_percent", "updated_at"])
 
     request.status = NegotiationRequestStatus.ACCEPTED
     request.resolved_by = actor
@@ -203,4 +205,19 @@ def confirm_by_customer(quotation: Quotation, *, actor) -> dict:
     """
     if quotation.status not in (QuotationStatus.SENT, QuotationStatus.UNDER_NEGOTIATION):
         raise ValidationError("This quotation cannot be confirmed in its current state")
+
+    # A customer must not be able to confirm out from under their own open
+    # change request. Without this the request is orphaned at SUBMITTED forever:
+    # the rep never accepts or rejects it, nobody is told, and the customer has
+    # silently accepted terms they were in the middle of disputing.
+    open_request = NegotiationRequest.objects.filter(
+        quotation=quotation, status=NegotiationRequestStatus.SUBMITTED
+    ).first()
+    if open_request is not None:
+        raise ValidationError(
+            "You have a change request awaiting a response. Your sales rep must accept or "
+            "decline it before this quotation can be confirmed.",
+            negotiation_request_id=open_request.id,
+        )
+
     return quotation_services.confirm(quotation, actor=actor)

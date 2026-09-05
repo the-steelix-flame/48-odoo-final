@@ -10,6 +10,7 @@
  */
 
 import { use, useState } from "react";
+import type { KeyboardEvent } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 
@@ -32,6 +33,18 @@ import {
 import { RISK_TONE, STATUS_TONE, dateTime, money, percent, titleCase } from "@/lib/format";
 import { useApi } from "@/lib/useApi";
 import type { Product, QuotationDetail, UpsellSuggestion } from "@/types";
+
+/**
+ * Enter commits the value by blurring the field, which fires the same onBlur
+ * handler a click-away would. One code path, so typing 17 and pressing Enter
+ * cannot produce a different result from typing 17 and clicking elsewhere.
+ */
+function commitOnEnter(event: KeyboardEvent<HTMLInputElement>) {
+  if (event.key === "Enter") {
+    event.preventDefault();
+    event.currentTarget.blur();
+  }
+}
 
 export default function QuotationBuilderPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
@@ -177,6 +190,7 @@ export default function QuotationBuilderPage({ params }: { params: Promise<{ id:
                         disabled={!editable || busy}
                         className={`${inputClass} w-20`}
                         defaultValue={Number(line.quantity)}
+                        onKeyDown={commitOnEnter}
                         onBlur={(e) =>
                           Number(e.target.value) !== Number(line.quantity) &&
                           updateLine(line.id, { quantity: e.target.value })
@@ -192,6 +206,7 @@ export default function QuotationBuilderPage({ params }: { params: Promise<{ id:
                         disabled={!editable || busy}
                         className={`${inputClass} w-20`}
                         defaultValue={Number(line.discount_percent)}
+                        onKeyDown={commitOnEnter}
                         onBlur={(e) =>
                           Number(e.target.value) !== Number(line.discount_percent) &&
                           updateLine(line.id, { discount_percent: e.target.value })
@@ -307,6 +322,7 @@ export default function QuotationBuilderPage({ params }: { params: Promise<{ id:
                     type="number"
                     className={inputClass}
                     defaultValue={Number(data.order_discount_percent)}
+                    onKeyDown={commitOnEnter}
                     onBlur={(e) =>
                       Number(e.target.value) !== Number(data.order_discount_percent) &&
                       run(() =>
