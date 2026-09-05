@@ -256,5 +256,5 @@ def chain_for_band(band: str, rules: list) -> list[str]:
     return {
         "NONE": [],
         "MEDIUM": ["SALES_MANAGER"],
-        "HIGH": ["FINANCE"],
+        "HIGH": ["SALES_MANAGER", "FINANCE"],
     }[band]

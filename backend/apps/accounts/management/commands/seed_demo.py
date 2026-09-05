@@ -256,11 +256,13 @@ class Command(BaseCommand):
         for name, band, lo, hi, roles, seq in [
             ("Within tier / category limit", RiskBand.NONE, 0, 0, [], 1),
             ("Over limit, blended risk medium", RiskBand.MEDIUM, 0, 60, ["SALES_MANAGER"], 2),
-            # Team decision: HIGH routes straight to Finance rather than
-            # Sales Manager -> Finance. A high-risk discount is a margin
-            # decision, so it goes to the role that owns margin, and the deal
-            # is not slowed by a manager step that cannot overrule Finance.
-            ("Over limit, blended high risk", RiskBand.HIGH, 60, 100, ["FINANCE"], 3),
+            # HIGH is a TWO-STAGE chain: the Sales Manager reviews first, and
+            # only once they approve does it reach Finance. Matches the brief's
+            # screen 18, "Over limit, blended high risk -> Sales manager then
+            # finance". Order matters; approvals/services.py walks it in
+            # sequence and Finance's step stays PENDING until step 1 clears.
+            ("Over limit, blended high risk", RiskBand.HIGH, 60, 100,
+             ["SALES_MANAGER", "FINANCE"], 3),
         ]:
             ApprovalRule.objects.get_or_create(
                 band=band,

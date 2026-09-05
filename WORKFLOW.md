@@ -205,13 +205,13 @@ band = NONE                        if not requires_approval
 ```
 
 The chain for a band is then read from `approval_rule` — `[]`, `["SALES_MANAGER"]`, or
-`["FINANCE"]`.
+`["SALES_MANAGER", "FINANCE"]`.
 
-> **Team decision (differs from the brief).** The brief's screen 18 says high risk routes
-> "Sales manager then finance". We route HIGH straight to **Finance only**: a high-risk discount
-> is a margin decision, so it goes to the role that owns margin, and the deal is not delayed by a
-> manager step that cannot overrule Finance anyway. This lives in the `approval_rule` table, so it
-> is a config change, not a code change — edit it on screen 18 to route it either way.
+> **HIGH is a two-stage chain.** The Sales Manager reviews first; Finance's step stays `PENDING`
+> and unreachable until step 1 is approved. Matches screen 18, "Over limit, blended high risk →
+> Sales manager then finance". `act()` walks the steps in sequence, so Finance cannot approve
+> ahead of the manager, and a rejection or return at step 1 closes the request without Finance
+> ever seeing it.
 
 ### Worked example — the brief's own scenario
 
