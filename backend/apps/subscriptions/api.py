@@ -42,14 +42,23 @@ class SubscriptionRowOut(Schema):
 
     @staticmethod
     def resolve_customer_name(obj) -> str:
+        # _detail-style endpoints hand Ninja a plain dict that already carries this
+        # value; Ninja passes the RAW dict to the resolver, so attribute access
+        # would raise AttributeError and the field would be dropped as "missing".
+        if isinstance(obj, dict):
+            return obj["customer_name"]
         return obj.customer.name
 
     @staticmethod
     def resolve_plan_name(obj) -> str:
+        if isinstance(obj, dict):
+            return obj["plan_name"]
         return obj.plan.name
 
     @staticmethod
     def resolve_interval(obj) -> str:
+        if isinstance(obj, dict):
+            return obj["interval"]
         return obj.plan.interval
 
 
