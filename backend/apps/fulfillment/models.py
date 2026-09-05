@@ -11,6 +11,10 @@ class Warehouse(TimeStampedModel):
     #: Cost multiplier the splitter uses to break ties. Main = 1.0, remote = 1.4.
     shipping_cost_weight = models.DecimalField(max_digits=6, decimal_places=2, default=1)
     base_shipment_cost = models.DecimalField(**money(default=30))
+    #: Working days from allocation to delivery. Drives the promised_date on
+    #: each allocation, which is what the delivery-slippage alert compares
+    #: against. Configurable per warehouse because a remote depot is slower.
+    lead_time_days = models.IntegerField(default=3)
     is_active = models.BooleanField(default=True)
 
     class Meta:

@@ -6,6 +6,7 @@ allocations -> reserve stock.
 
 from __future__ import annotations
 
+from datetime import timedelta
 from decimal import Decimal
 
 from django.db import transaction
@@ -86,8 +87,11 @@ def accept_plan(plan: FulfillmentPlan, *, actor=None) -> FulfillmentPlan:
     if plan.status not in (FulfillmentStatus.SUGGESTED, FulfillmentStatus.OVERRIDDEN):
         raise ValidationError("This plan has already been accepted")
 
-    for alloc in plan.allocations.filter(is_backorder=False).select_related("quotation_line"):
+    for alloc in plan.allocations.filter(is_backorder=False).select_related(
+        "quotation_line", "warehouse"
+    ):
         _reserve(alloc, actor=actor)
+        _promise(alloc)
 
     has_backorder = plan.allocations.filter(is_backorder=True).exists()
     plan.status = FulfillmentStatus.BACKORDER if has_backorder else FulfillmentStatus.ACCEPTED
@@ -141,6 +145,17 @@ def override_plan(plan: FulfillmentPlan, allocations: list[dict], *, actor=None)
     )
     plan.save()
     return plan
+
+
+def _promise(alloc: FulfillmentAllocation) -> None:
+    """Stamp the delivery promise from the warehouse's own lead time.
+
+    The delivery-slippage sweep compares promised_date against today. Until
+    this is set the sweep has nothing to filter on and reports zero forever,
+    so screen 14's third card stays permanently empty.
+    """
+    alloc.promised_date = timezone.localdate() + timedelta(days=alloc.warehouse.lead_time_days)
+    alloc.save(update_fields=["promised_date", "updated_at"])
 
 
 def _reserve(alloc: FulfillmentAllocation, *, actor=None) -> None:
@@ -282,6 +297,7 @@ def consolidate_backorders(plan: FulfillmentPlan, *, actor=None) -> FulfillmentP
         )
         if should_reserve and not row.is_backorder:
             _reserve(created, actor=actor)
+            _promise(created)
 
     still_short = plan.allocations.filter(is_backorder=True).exists()
     _recost(plan)
