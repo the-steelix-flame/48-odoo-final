@@ -20,6 +20,7 @@ import {
   Table,
   inputClass,
 } from "@/components/ui";
+import { useAuth } from "@/lib/auth";
 import { RISK_TONE, STATUS_TONE, money, percent, titleCase } from "@/lib/format";
 import { useApi } from "@/lib/useApi";
 import { PIPELINE_STAGES } from "@/types";
@@ -28,6 +29,14 @@ import type { Customer, QuotationDetail, QuotationSummary } from "@/types";
 export default function QuotationsPage() {
   const router = useRouter();
   const [view, setView] = useState<"kanban" | "table">("kanban");
+  const { role } = useAuth();
+  /**
+   * Mirrors the guard on POST /quotations/. Building quotations is the Sales
+   * Rep's job; a Sales Manager or Finance user reviews and approves them. A
+   * manager who could raise a quote could also approve their own discount,
+   * which is the separation the approval chain exists to enforce.
+   */
+  const mayCreate = role === "SALES_REP" || role === "ADMIN";
   const [creating, setCreating] = useState(false);
 
   // The dashboard's "+ New Quotation" links here with ?new=1. Without this the
@@ -35,10 +44,11 @@ export default function QuotationsPage() {
   // Read on mount rather than with useSearchParams so the page can still be
   // statically prerendered without a Suspense boundary.
   useEffect(() => {
+    if (!mayCreate) return;
     if (new URLSearchParams(window.location.search).get("new") === "1") {
       setCreating(true);
     }
-  }, []);
+  }, [mayCreate]);
   const [customerId, setCustomerId] = useState<string>("");
   const [createError, setCreateError] = useState<string | null>(null);
 
@@ -70,7 +80,15 @@ export default function QuotationsPage() {
         subtitle="Every quotation in the system — click one to open its builder."
         actions={
           <>
-            <Button onClick={() => setCreating((open) => !open)}>+ New Quotation</Button>
+            <span
+              title={
+                mayCreate ? undefined : "Only Sales Reps and Admins can create quotations"
+              }
+            >
+              <Button onClick={() => setCreating((open) => !open)} disabled={!mayCreate}>
+                + New Quotation
+              </Button>
+            </span>
             <Button
               variant="secondary"
               onClick={() => setView(view === "kanban" ? "table" : "kanban")}
@@ -81,7 +99,20 @@ export default function QuotationsPage() {
         }
       />
 
-      {creating && (
+      {!mayCreate && (
+        <div className="mb-6">
+          <Card title="Creating quotations">
+            <p className="text-sm text-[#475569]">
+              Only <strong>Sales Reps</strong> and <strong>Admins</strong> can create quotations.
+              As {role === "SALES_MANAGER" ? "a Sales Manager" : "Finance"} you review and decide
+              them instead — a reviewer who could raise a quote could also approve their own
+              discount, which is exactly what the approval chain exists to prevent.
+            </p>
+          </Card>
+        </div>
+      )}
+
+      {creating && mayCreate && (
         <div className="mb-6">
           <Card title="New quotation">
             <div className="flex flex-wrap items-end gap-3">

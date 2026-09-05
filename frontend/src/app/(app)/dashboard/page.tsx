@@ -40,12 +40,14 @@ export default function DashboardPage() {
             </p>
           </div>
           <div className="flex gap-[12px]">
+            {(role === "SALES_REP" || role === "ADMIN") && (
             <Link
               href="/quotations?new=1"
               className="rounded-[8px] bg-gradient-to-br from-[#22D3EE] to-[#0891B2] px-[18px] py-[10px] text-[13.5px] font-semibold text-[#0F172A] shadow-[0_2px_10px_rgba(8,145,178,0.3)] transition hover:from-[#34D399] hover:to-[#059669] hover:text-white"
             >
               + New Quotation
             </Link>
+            )}
             <Link
               href="/approvals"
               className="rounded-[8px] border border-[rgba(255,255,255,0.15)] bg-[rgba(255,255,255,0.05)] px-[18px] py-[10px] text-[13.5px] font-medium transition hover:bg-[rgba(255,255,255,0.1)]"
