@@ -11,6 +11,7 @@ things the demo depends on:
 
 from __future__ import annotations
 
+import hashlib
 from decimal import Decimal
 
 from django.db import transaction
@@ -139,6 +140,40 @@ def _tier_ceiling(tier: str) -> Decimal:
 
 
 @transaction.atomic
+def terms_fingerprint(quotation: Quotation) -> str:
+    """What an approver actually signs off, reduced to one comparable string.
+
+    Every input that moves the money is in here and nothing else is. So a
+    change to a price, a quantity, a line discount or the order discount stops
+    matching by itself — there is no invalidation step to remember and
+    therefore none to forget — while sending the quotation, which changes its
+    status but not a single number, leaves the approval standing.
+
+    Note it hashes INPUTS, not the computed totals: `recalculate` rewrites
+    `line_total` constantly without anything having actually changed.
+    """
+    parts = [str(Decimal(quotation.order_discount_percent or 0))]
+    for line in quotation.lines.order_by("id"):
+        parts.append(
+            f"{line.id}:{Decimal(line.quantity)}:{Decimal(line.unit_price)}:"
+            f"{Decimal(line.discount_percent)}"
+        )
+    return hashlib.sha256("|".join(parts).encode()).hexdigest()
+
+
+def mark_terms_approved(quotation: Quotation) -> None:
+    """Record that the CURRENT terms are the approved ones."""
+    quotation.approved_terms_hash = terms_fingerprint(quotation)
+    quotation.save(update_fields=["approved_terms_hash", "updated_at"])
+
+
+def terms_are_approved(quotation: Quotation) -> bool:
+    """True when nothing that affects the money has changed since sign-off."""
+    return bool(quotation.approved_terms_hash) and (
+        quotation.approved_terms_hash == terms_fingerprint(quotation)
+    )
+
+
 def order_discount_factor(quotation: Quotation) -> Decimal:
     """The multiplier from a line's own net to what is actually charged for it.
 
@@ -425,6 +460,9 @@ def submit(quotation: Quotation, *, actor=None) -> Quotation:
 
     if not quotation.requires_approval:
         transition(quotation, QuotationStatus.APPROVED, actor=actor)
+        # Clearing every ceiling is an approval too — it just didn't need a
+        # human. Recording it here means these terms survive being sent.
+        mark_terms_approved(quotation)
         record_event(
             quotation,
             QuotationEventType.AUTO_APPROVED,
@@ -481,7 +519,23 @@ def confirm(quotation: Quotation, *, actor=None) -> dict:
     # A counter-offer may have pushed this back over a ceiling while it sat in
     # the portal. Re-score before committing rather than trusting the old band.
     recalculate(quotation)
-    if quotation.requires_approval and quotation.status != QuotationStatus.APPROVED:
+    # Approval attaches to the TERMS as well as to the status.
+    #
+    # `status == APPROVED` alone was the whole test, and it is still necessary:
+    # APPROVED -> PENDING_APPROVAL is not a legal transition, so re-approving
+    # from there raises rather than reopening anything.
+    #
+    # But it was not sufficient. `send_to_customer` moves an approved quote
+    # APPROVED -> SENT, so the approval was thrown away the instant the offer
+    # went out: a discount that Sales Manager and Finance had both signed off
+    # went to the customer, and the customer accepting it put the identical
+    # figures straight back in the queue for the same two people. A discount
+    # only ever reaches a customer after approval, so their yes is the last one
+    # needed and the order should go to fulfillment.
+    already_cleared = (
+        quotation.status == QuotationStatus.APPROVED or terms_are_approved(quotation)
+    )
+    if quotation.requires_approval and not already_cleared:
         transition(quotation, QuotationStatus.PENDING_APPROVAL, actor=actor)
         from apps.approvals.services import open_approval_request
 

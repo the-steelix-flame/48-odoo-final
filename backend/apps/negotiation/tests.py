@@ -14,7 +14,9 @@ from apps.accounts import businesses
 from apps.accounts.models import User
 from apps.billing import services as billing
 from apps.catalog.models import Product, ProductCategory
+from apps.approvals import services as approval_services
 from apps.common.enums import (
+    ApprovalStatus,
     CustomerTier,
     InvoiceType,
     NegotiationRequestStatus,
@@ -25,6 +27,7 @@ from apps.common.errors import NotFound, PermissionDenied, ValidationError
 from apps.governance.models import CategoryDiscountCeiling, TierDiscountCeiling
 from apps.negotiation import api as negotiation_api
 from apps.negotiation import services as negotiation
+from apps.quotations import services as quotation_services
 from apps.quotations import services as quotations
 
 
@@ -841,6 +844,97 @@ class BillingFlowTests(PortalTestBase):
         quotation = self._confirmed()
         with self.assertRaises(ValidationError):
             negotiation.pay_bill(quotation, actor=self.buyer)
+
+
+class ApprovedTermsTests(PortalTestBase):
+    """A discount only reaches a customer after approval, so their yes is the
+    last one needed.
+
+    Approval used to be read off the STATUS, and `send_to_customer` moves an
+    approved quote APPROVED -> SENT — so the approval was thrown away the
+    instant the offer went out, and the customer accepting terms two approvers
+    had just cleared put the identical figures back in front of the same two.
+    """
+
+    def setUp(self):
+        super().setUp()
+        # An admin can act on any step, so one actor clears a two-stage chain.
+        self.approver = User.objects.create_user(
+            email="adm@terms.test", password="x", full_name="Adm", role=Role.ADMIN
+        )
+
+    def _approved_and_sent(self, discount="40"):
+        """A quote deep enough to need approval, approved, then sent."""
+        quotation = self._quotation(discount=discount)
+        quotations.submit(quotation, actor=self.rep)
+        quotation.refresh_from_db()
+        self.assertEqual(quotation.status, QuotationStatus.PENDING_APPROVAL)
+
+        # Clear every stage, however many the risk band asked for.
+        for _ in range(5):
+            quotation.refresh_from_db()
+            if quotation.status == QuotationStatus.APPROVED:
+                break
+            pending = quotation.approval_requests.filter(
+                status=ApprovalStatus.PENDING
+            ).first()
+            if pending is None:
+                break
+            approval_services.act(
+                pending, actor=self.approver, decision=ApprovalStatus.APPROVED, note="ok"
+            )
+        quotation.refresh_from_db()
+        self.assertEqual(quotation.status, QuotationStatus.APPROVED)
+        self.assertTrue(quotation.requires_approval, "still a high-discount deal")
+
+        negotiation.send_to_customer(quotation, actor=self.rep)
+        quotation.refresh_from_db()
+        self.assertEqual(quotation.status, QuotationStatus.SENT)
+        return quotation
+
+    def test_sending_an_approved_quote_does_not_lose_its_approval(self):
+        quotation = self._approved_and_sent()
+        self.assertTrue(quotation_services.terms_are_approved(quotation))
+
+    def test_accepting_already_approved_terms_goes_straight_to_fulfillment(self):
+        """The reported bug, end to end."""
+        quotation = self._approved_and_sent()
+
+        negotiation.confirm_by_customer(quotation, actor=self.buyer)
+
+        quotation.refresh_from_db()
+        self.assertEqual(quotation.status, QuotationStatus.CONFIRMED)
+        # And no second approval was raised for terms already signed off.
+        self.assertFalse(
+            quotation.approval_requests.filter(status=ApprovalStatus.PENDING).exists()
+        )
+
+    def test_renegotiating_after_approval_invalidates_it(self):
+        """The guard has to stay honest in the other direction: an approval must
+        never carry over onto numbers nobody approved.
+
+        A SENT quote cannot be hand-edited, so the way its terms move is the
+        customer countering and the rep accepting — which rewrites the order
+        discount and must therefore need approving again.
+        """
+        quotation = self._approved_and_sent()
+
+        request = negotiation.submit_request(
+            quotation, actor=self.buyer, requested_discount_percent=Decimal("55")
+        )
+        negotiation.accept_request(request, actor=self.rep)
+        quotation.refresh_from_db()
+
+        self.assertFalse(quotation_services.terms_are_approved(quotation))
+        self.assertEqual(quotation.status, QuotationStatus.PENDING_APPROVAL)
+
+    def test_the_fingerprint_ignores_a_recalculate_that_changes_nothing(self):
+        """`recalculate` rewrites `line_total` constantly. Hashing the totals
+        rather than the inputs would invalidate an approval for free."""
+        quotation = self._approved_and_sent()
+        before = quotation_services.terms_fingerprint(quotation)
+        quotation_services.recalculate(quotation)
+        self.assertEqual(quotation_services.terms_fingerprint(quotation), before)
 
 
 class NegotiationRoleTests(PortalTestBase):

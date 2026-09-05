@@ -1392,6 +1392,63 @@ about it in its own words. The opening send is untouched.
 
 ---
 
+### Accepting already-approved terms no longer reopens approval
+
+Reported on Q-1014, and the audit trail tells the whole story:
+
+```
+22:53  SUBMITTED  → approval #11: Sales Manager APPROVED, Finance APPROVED
+22:59  SENT_TO_CUSTOMER          ← the approved offer goes out
+23:15  SUBMITTED  → approval #12: the SAME two people, the SAME figures
+```
+
+The customer accepted exactly what two approvers had just cleared, and it went
+straight back into their queue. A discount only ever reaches a customer *after*
+approval, so the customer's yes is the last decision needed — the order should
+go to fulfillment.
+
+**Approval was being read off the status.** `confirm()` tested
+`status != APPROVED`, and `send_to_customer` moves an approved quote
+`APPROVED → SENT` — so the approval was discarded the instant the offer went
+out. The status records where the quote *is*, not what was *agreed to*.
+
+Approval now attaches to the terms. `terms_fingerprint()` hashes every input
+that moves the money — the order discount, and each line's quantity, unit price
+and discount — and `approved_terms_hash` stores it when an approval completes
+(including an auto-approval, which is still an approval, it just didn't need a
+human).
+
+Two properties make it safe:
+
+*It cannot go stale.* Any change to the money changes the hash by itself, so
+there is no invalidation step to remember and therefore none to forget. A
+renegotiation after approval still reopens it, which is tested.
+
+*It hashes inputs, not totals.* `recalculate()` rewrites `line_total`
+constantly with nothing having actually changed; fingerprinting the outputs
+would throw away an approval for free.
+
+The status check is **kept alongside** it, not replaced — `APPROVED →
+PENDING_APPROVAL` is not a legal transition, so on a quote sitting at APPROVED
+the old check was also preventing a crash rather than only a redundant
+approval. The full suite caught exactly that when the first attempt dropped it.
+
+| File | Change |
+|---|---|
+| `apps/quotations/models.py` | `approved_terms_hash` (migration `0005`). |
+| `apps/quotations/services.py` | `terms_fingerprint()`, `mark_terms_approved()`, `terms_are_approved()`; the confirm guard; auto-approval records it. |
+| `apps/approvals/services.py` | A completed approval records what it approved. |
+
+4 tests, including the reported flow end to end. 167 backend tests pass.
+
+⚠️ **Quotations approved before this migration have an empty hash**, so they
+need one more pass through approval to benefit; new deals work end to end.
+Q-1014 itself is legitimately back in approval — the discount correction in the
+previous commit changed its numbers, which is precisely the invalidation
+working.
+
+---
+
 ## 7. Migrations added by this lane
 
 Anyone pulling this must run `python manage.py migrate`:
@@ -1402,6 +1459,7 @@ Anyone pulling this must run `python manage.py migrate`:
 | `negotiation/0004_alter_negotiationrequest_counter_discount_percent` | Makes it nullable — see bug 1 above. |
 | `negotiation/0005_negotiationevent` | The append-only negotiation log. |
 | `negotiation/0006_backfill_negotiation_events` | Reconstructs existing conversations into it. Data migration, reversible. |
+| `quotations/0005_quotation_approved_terms_hash` | Pins an approval to the terms it approved, so sending the quote doesn't discard it. |
 
 Business and user management deliberately needed **no** migration; they reuse `User.is_active`,
 `User.date_joined` and `Customer.portal_user`.
