@@ -512,3 +512,37 @@ export interface PortalQuotation {
   messages: PortalMessage[];
   requests: PortalRequest[];
 }
+
+// ---------------------------------------------- negotiation (internal inbox)
+/** A customer counter-offer as the REP sees it — carries the deal it belongs
+ *  to, which the customer-facing `PortalRequest` does not need. */
+export interface InternalNegotiationRequest {
+  id: number;
+  quotation_id: number;
+  quotation_number: string;
+  customer_name: string;
+  requested_discount_percent?: string | null;
+  requested_delivery_date?: string | null;
+  message: string;
+  status: "SUBMITTED" | "ACCEPTED" | "REJECTED" | "COUNTERED";
+  resolution_note: string;
+  created_at: string;
+}
+
+/** What `POST /portal/internal/requests/{id}/accept` hands back. The important
+ *  field is `re_entered_approval` — accepting a counter re-runs the risk engine
+ *  and may reopen approval automatically. */
+export interface NegotiationAcceptResult {
+  quotation_id: number;
+  status: QuotationStatus;
+  risk_band: RiskBand;
+  blended_risk_score: string;
+  re_entered_approval: boolean;
+}
+
+/** `GET /insights/reports/invoices` — the Finance cash view. */
+export interface InvoiceReport {
+  outstanding: string;
+  collected: string;
+  overdue: number;
+}

@@ -49,13 +49,29 @@ class PortalMessageOut(Schema):
 
 
 class PortalRequestOut(Schema):
+    """Internal-only. The rep inbox needs to know WHICH deal a counter-offer is
+    against — without it the screen shows "someone wants 20% off" and nothing
+    else. Added by @sinjeki for the negotiation inbox; @the-steelix-flame please
+    sanity-check, this is your lane."""
+
     id: int
+    quotation_id: int
+    quotation_number: str
+    customer_name: str
     requested_discount_percent: Decimal | None = None
     requested_delivery_date: date | None = None
     message: str
     status: str
     resolution_note: str
     created_at: datetime
+
+    @staticmethod
+    def resolve_quotation_number(obj) -> str:
+        return obj.quotation.number
+
+    @staticmethod
+    def resolve_customer_name(obj) -> str:
+        return obj.quotation.customer.name
 
 
 class PortalQuotationOut(Schema):
@@ -162,7 +178,7 @@ def send_to_customer(request, quotation_id: int):
 
 @router.get("/internal/requests", response=list[PortalRequestOut], auth=internal_auth)
 def list_requests(request, status: str | None = None):
-    qs = NegotiationRequest.objects.select_related("quotation")
+    qs = NegotiationRequest.objects.select_related("quotation", "quotation__customer")
     if status:
         qs = qs.filter(status=status)
     return list(qs)

@@ -21,7 +21,7 @@ import {
 } from "@/components/ui";
 import { money, titleCase } from "@/lib/format";
 import { useApi } from "@/lib/useApi";
-import type { Category, QuotationStatus, ReportData, User } from "@/types";
+import type { Category, InvoiceReport, QuotationStatus, ReportData, User } from "@/types";
 
 const STATUSES: QuotationStatus[] = [
   "DRAFT",
@@ -52,6 +52,7 @@ export default function ReportsPage() {
   );
   const { data: reps } = useApi<User[]>("/auth/users");
   const { data: categories } = useApi<Category[]>("/catalog/categories");
+  const { data: cash } = useApi<InvoiceReport>("/insights/reports/invoices");
 
   return (
     <>
@@ -157,6 +158,33 @@ export default function ReportsPage() {
               hint="From the upsell suggestion log"
             />
           </div>
+
+          {/* Cash position. Deliberately NOT filtered — outstanding money is a
+              company-wide fact, not something that changes with the rep or
+              date filters above. */}
+          {cash && (
+            <Card
+              title="Cash position"
+              subtitle="Every invoice, unfiltered — what is owed, what landed, what is late"
+              className="mb-6"
+            >
+              <div className="grid gap-4 md:grid-cols-3">
+                <StatCard
+                  label="Outstanding"
+                  value={money(cash.outstanding)}
+                  hint="Open and partially paid"
+                  tone={Number(cash.outstanding) > 0 ? "amber" : "slate"}
+                />
+                <StatCard label="Collected" value={money(cash.collected)} hint="Payments received" tone="green" />
+                <StatCard
+                  label="Overdue Invoices"
+                  value={cash.overdue}
+                  hint="Past due date, still unpaid"
+                  tone={cash.overdue > 0 ? "red" : "slate"}
+                />
+              </div>
+            </Card>
+          )}
 
           <div className="grid gap-6 lg:grid-cols-2">
             <Card title="By status">

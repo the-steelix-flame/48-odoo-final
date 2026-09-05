@@ -14,6 +14,7 @@ const NAV: NavItem[] = [
   { href: "/dashboard", label: "Dashboard" },
   { href: "/quotations", label: "Quotations", badge: "12" },
   { href: "/approvals", label: "Approvals", badge: "3" },
+  { href: "/negotiations", label: "Negotiations" },
   { href: "/fulfillment", label: "Fulfillment", badge: "2" },
   { href: "/subscriptions", label: "Subscriptions" },
   { href: "/invoices", label: "Invoices", badge: "4" },
