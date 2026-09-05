@@ -131,3 +131,41 @@ class PeriodArithmeticTests(SimpleTestCase):
     def test_quarterly_and_yearly(self):
         self.assertEqual(next_period(date(2026, 9, 1), "QUARTERLY").end, date(2026, 12, 1))
         self.assertEqual(next_period(date(2026, 9, 1), "YEARLY").end, date(2027, 9, 1))
+
+
+class IntervalCoverageTests(SimpleTestCase):
+    """A cadence that `next_period` doesn't know raises on the confirm path —
+    after the customer has already accepted the quote. These tests exist so
+    that failure happens here instead of there."""
+
+    def test_every_interval_has_a_period(self):
+        """Adding a value to RecurringInterval without teaching next_period
+        about it is the bug this catches. If you are here because this failed,
+        add your interval to INTERVAL_MONTHS in proration.py."""
+        from apps.common.enums import RecurringInterval
+
+        start = date(2026, 9, 1)
+        for value in RecurringInterval.values:
+            with self.subTest(interval=value):
+                period = next_period(start, value)
+                self.assertGreater(
+                    period.end, period.start, f"{value} produced an empty billing window"
+                )
+
+    def test_biennial_rolls_forward_two_calendar_years(self):
+        self.assertEqual(
+            next_period(date(2026, 9, 1), "BIENNIAL").end, date(2028, 9, 1)
+        )
+
+    def test_biennial_survives_a_leap_day(self):
+        """Feb 29 2024 + 24 months lands in 2026, which is NOT a leap year, so
+        the day clamps to the 28th rather than raising. A two-year cadence hits
+        this far more often than a yearly one, because it can only ever land on
+        a leap year or skip one entirely."""
+        self.assertEqual(
+            next_period(date(2024, 2, 29), "BIENNIAL").end, date(2026, 2, 28)
+        )
+
+    def test_unknown_interval_still_raises(self):
+        with self.assertRaises(ValueError):
+            next_period(date(2026, 9, 1), "FORTNIGHTLY")
