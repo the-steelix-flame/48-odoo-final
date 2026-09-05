@@ -132,6 +132,31 @@ Every other router still returns 200; `manage.py test apps` still 28/28.
 returned model instances instead, that is a bigger refactor but arguably cleaner; this fix was
 chosen to be the smallest safe change that unblocks the demo.
 
+### 2.1b ✅ FIXED — the same resolver bug broke three more detail screens
+
+Found by enumerating all 62 routes from `/api/openapi.json` and hitting every one, rather than
+testing the paths we happened to think of. Three more endpoints were returning 500:
+
+| Endpoint | Screen | Fields that failed |
+|---|---|---|
+| `GET /api/billing/invoices/{id}` | 13 Invoice Detail | `customer_name`, `quotation_number` |
+| `GET /api/subscriptions/{id}` | 10 Billing Detail | `customer_name`, `plan_name`, `interval` |
+| `GET /api/approvals/{id}` | 6 Approval Detail | `quotation_number`, `customer_name`, `customer_tier` |
+
+Identical cause to §2.1 cause 2: the list endpoints pass model instances (so the relation-walking
+resolvers work and those routes returned 200), while the detail endpoints build a plain dict —
+and Ninja hands the raw dict to the resolver.
+
+**Every detail screen in the app was broken**, across all three lanes. Nothing caught it because
+the test suite only covers the four pure functions; it never touches HTTP.
+
+*Fix:* 11 resolvers across `subscriptions/api.py` (3, ours), `billing/api.py` (3, ours) and
+`approvals/api.py` (5, @the-steelix-flame's) now accept either shape. 31 lines added, no logic
+changed, no behaviour change on the list paths.
+
+**Verified:** all 30 GET endpoints return 200, portal correctly 403s a non-customer, role
+enforcement returns 403 for a REP on a Finance-only mutation, `test apps` 28/28.
+
 ### 2.2 🟡 `DEBUG=True` leaks full tracebacks over HTTP
 
 The 500 above returned a complete traceback including absolute filesystem paths

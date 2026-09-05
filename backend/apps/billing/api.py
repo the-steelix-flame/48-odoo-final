@@ -30,6 +30,11 @@ class InvoiceRowOut(Schema):
 
     @staticmethod
     def resolve_customer_name(obj) -> str:
+        # _detail-style endpoints hand Ninja a plain dict that already carries this
+        # value; Ninja passes the RAW dict to the resolver, so attribute access
+        # would raise AttributeError and the field would be dropped as "missing".
+        if isinstance(obj, dict):
+            return obj["customer_name"]
         return obj.customer.name
 
 
@@ -53,6 +58,8 @@ class PaymentOut(Schema):
 
     @staticmethod
     def resolve_recorded_by_name(obj) -> str | None:
+        if isinstance(obj, dict):
+            return obj.get("recorded_by_name")
         return (obj.recorded_by.full_name or obj.recorded_by.email) if obj.recorded_by_id else None
 
 
@@ -71,6 +78,8 @@ class InvoiceDetailOut(InvoiceRowOut):
 
     @staticmethod
     def resolve_quotation_number(obj) -> str | None:
+        if isinstance(obj, dict):
+            return obj.get("quotation_number")
         return obj.quotation.number if obj.quotation_id else None
 
 

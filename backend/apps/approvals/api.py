@@ -52,23 +52,36 @@ class ApprovalRowOut(Schema):
 
     @staticmethod
     def resolve_quotation_number(obj) -> str:
+        # _detail-style endpoints hand Ninja a plain dict that already carries this
+        # value; Ninja passes the RAW dict to the resolver, so attribute access
+        # would raise AttributeError and the field would be dropped as "missing".
+        if isinstance(obj, dict):
+            return obj["quotation_number"]
         return obj.quotation.number
 
     @staticmethod
     def resolve_customer_name(obj) -> str:
+        if isinstance(obj, dict):
+            return obj["customer_name"]
         return obj.quotation.customer.name
 
     @staticmethod
     def resolve_customer_tier(obj) -> str:
+        if isinstance(obj, dict):
+            return obj["customer_tier"]
         return obj.quotation.customer.tier
 
     @staticmethod
     def resolve_current_stage(obj) -> str | None:
+        if isinstance(obj, dict):
+            return obj.get("current_stage")
         step = obj.current_step
         return step.role_required if step else None
 
     @staticmethod
     def resolve_assigned_to(obj) -> str | None:
+        if isinstance(obj, dict):
+            return obj.get("assigned_to")
         step = obj.current_step
         if step is None or step.assignee_id is None:
             return None
