@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useAuth } from "@/lib/auth";
+import { ROLE_LABEL } from "@/lib/format";
 
 const ROUTE_MAP: Record<string, string> = {
   "/dashboard": "Dashboard",
@@ -42,6 +43,9 @@ export function Header() {
 
   const initials = user?.full_name ? user.full_name.split(" ").map(n => n[0]).join("").substring(0,2).toUpperCase() : "JR";
   const name = user?.full_name || "J. Rao";
+  /* The badge says who you are signed in as.  No fallback: showing the wrong
+     role is worse than showing none while the session is still loading. */
+  const roleLabel = user ? ROLE_LABEL[user.role] : null;
 
   return (
     <header className="sticky top-0 z-10 flex h-[60px] shrink-0 items-center gap-4 border-b border-[#E2E8F0] bg-[rgba(248,250,252,0.86)] px-[26px] backdrop-blur-[8px]">
@@ -60,10 +64,12 @@ export function Header() {
         ))}
       </div>
       <div className="flex-1"></div>
-      <div className="flex items-center gap-[7px] rounded-[8px] border border-[#DFE5ED] bg-white p-[6px_11px] text-[12px] text-[#4B5A6B]">
-        <span className="h-[7px] w-[7px] animate-dfPulse rounded-full bg-[#0891B2]"></span>
-        Rules engine live
-      </div>
+      {roleLabel && (
+        <div className="flex items-center gap-[7px] rounded-[8px] border border-[#DFE5ED] bg-white p-[6px_11px] text-[12px] text-[#4B5A6B]">
+          <span className="h-[7px] w-[7px] rounded-full bg-[#0891B2]"></span>
+          {roleLabel}
+        </div>
+      )}
       <div className="flex cursor-pointer items-center gap-[9px] rounded-full border border-[#E2E8F0] p-[5px_11px_5px_6px] transition-colors hover:border-[#0891B2]">
         <span className="flex h-[26px] w-[26px] items-center justify-center rounded-full bg-[#E2E8F0] font-mono text-[11.5px] text-[#334155]">
           {initials}

@@ -650,6 +650,34 @@ screenshot.
 belongs to an account fails with a clear message rather than silently attaching a portal role to
 an existing staff login.
 
+### The header badge says who you are, not that the rules engine is up
+
+Every internal role saw the same pill in the top bar: a pulsing dot and the words **Rules engine
+live**. It was decorative — nothing behind it ever checked whether the engine was actually running,
+so it was a claim the UI could not have retracted if it were false. Meanwhile the app is
+role-shaped throughout (the nav, the dashboard heading, `/admin` and `/settings` gates, the
+analytics sections), and nothing on screen told you which role you were signed in as. On a demo
+where you switch between four seeded logins, that is the thing you actually need in the header.
+
+The pill now shows the signed-in user's role.
+
+| File | Change |
+|---|---|
+| `lib/format.ts` | New `ROLE_LABEL: Record<Role, string>`. Wording matches the signup form, so the badge reads the same as the role you were given — "Finance / Operations", not `FINANCE`. |
+| `components/shell/Header.tsx` | Pill renders `ROLE_LABEL[user.role]`. |
+
+Two details worth keeping:
+
+- **No fallback role.** The name beside it falls back to `"J. Rao"` while the session loads; the
+  badge does not. Showing someone the wrong user type is worse than briefly showing none, so the
+  pill is omitted until `user` resolves.
+- **The dot no longer pulses.** `animate-dfPulse` said *live*, which is a liveness signal. Identity
+  is not a heartbeat. The keyframe is still defined in `tailwind.config.ts` and is now unused —
+  left in place rather than removed, since it is a shared design token.
+
+Customers are unaffected: `Header` mounts only in the `(app)` shell, and the portal has its own.
+`CUSTOMER` is in the map for completeness.
+
 ---
 
 ## 2. What this is NOT (scope decision)
