@@ -33,6 +33,8 @@ import type { Allocation, FulfillmentPlan, Role, Warehouse } from "@/types";
  */
 const MAY_MANAGE_FULFILMENT: Role[] = ["FINANCE", "ADMIN"];
 const NEEDS_FINANCE = "Only Finance or Admin can commit stock";
+/** Mirrors the guard in `mark_shipped`: confirmed → invoiced → paid → shipped. */
+const NEEDS_PAYMENT = "This order has not been paid yet — goods ship once the invoice is settled";
 
 type DraftRow = {
   key: string;
@@ -271,6 +273,13 @@ export default function FulfillmentDetailPage({ params }: { params: Promise<{ id
   const canAccept = data.status === "SUGGESTED" || data.status === "OVERRIDDEN";
   const mayManage = role !== null && MAY_MANAGE_FULFILMENT.includes(role);
 
+  // Shipping is the last step of the lifecycle, so it only appears once the
+  // split has been accepted and there is something left that hasn't gone out.
+  const awaitingDespatch = shipping.filter((a) => !a.shipped_at);
+  const canShip = !canAccept && data.status !== "SHIPPED" && awaitingDespatch.length > 0;
+  const paid = data.billing_state === "PAID";
+  const shipBlockedReason = !mayManage ? NEEDS_FINANCE : !paid ? NEEDS_PAYMENT : undefined;
+
   async function run(path: string, fallback: string) {
     setBusy(true);
     setActionError(null);
@@ -290,7 +299,15 @@ export default function FulfillmentDetailPage({ params }: { params: Promise<{ id
         subtitle={data.customer_name}
         actions={
           <>
-            <Badge tone={data.status === "BACKORDER" ? "red" : "blue"}>
+            <Badge
+              tone={
+                data.status === "BACKORDER"
+                  ? "red"
+                  : data.status === "SHIPPED"
+                    ? "green"
+                    : "blue"
+              }
+            >
               {data.status.replace(/_/g, " ")}
             </Badge>
             {data.is_manual_override && <Badge tone="amber">Manually overridden</Badge>}
@@ -350,6 +367,16 @@ export default function FulfillmentDetailPage({ params }: { params: Promise<{ id
                 </Button>
               </span>
             </>
+          ) : canShip ? (
+            <span title={shipBlockedReason}>
+              <Button
+                variant="success"
+                onClick={() => run(`/fulfillment/plans/${id}/ship`, "Could not ship this order")}
+                disabled={busy || !mayManage || !paid}
+              >
+                {busy ? "Shipping…" : "Mark Shipped"}
+              </Button>
+            </span>
           ) : null
         }
       >
@@ -370,8 +397,10 @@ export default function FulfillmentDetailPage({ params }: { params: Promise<{ id
               <Cell>
                 {allocation.is_backorder ? (
                   <Badge tone="red">Backorder</Badge>
+                ) : allocation.shipped_at ? (
+                  <Badge tone="green">Shipped</Badge>
                 ) : (
-                  <Badge tone="green">Allocated</Badge>
+                  <Badge tone="blue">Allocated</Badge>
                 )}
               </Cell>
             </Row>
@@ -380,6 +409,21 @@ export default function FulfillmentDetailPage({ params }: { params: Promise<{ id
         )}
 
         <div className="mt-4 space-y-2">
+          {canShip && !paid && mayManage && (
+            <Note>
+              This order is accepted and reserved, but it hasn&apos;t been paid yet. Goods ship
+              once the invoice is settled — the order lifecycle is confirmed, invoiced, paid, then
+              shipped.
+            </Note>
+          )}
+          {data.status === "SHIPPED" && (
+            <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3">
+              <p className="text-sm text-emerald-700">
+                This order has shipped. Stock has been deducted and it no longer appears in the
+                fulfillment queue.
+              </p>
+            </div>
+          )}
           {data.consolidation_available && (
             <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3">
               <p className="text-sm text-emerald-700">

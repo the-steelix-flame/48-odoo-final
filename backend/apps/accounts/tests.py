@@ -6,10 +6,13 @@ These need a database (they create real users and hash real passwords), so
 they're TestCase rather than SimpleTestCase.
 """
 
+from decimal import Decimal
+
 from django.test import TestCase
 
-from apps.accounts import businesses
+from apps.accounts import businesses, warehouses
 from apps.accounts.models import Customer, User
+from apps.fulfillment.models import Warehouse
 from apps.common.enums import CustomerTier, Role
 from apps.common.errors import ValidationError
 
@@ -406,3 +409,136 @@ class SuspendedLoginTests(TestCase):
         self.assertIsNone(
             authenticate(username="buyer@wayne.test", password=result.password)
         )
+
+
+class WarehouseAdminTests(TestCase):
+    """Phase 1 of PLAN-distance-fulfillment.md.
+
+    Nothing here asserts a distance — nothing computes one yet. These cover the
+    field scaffolding and the guards that stop an admin breaking allocation.
+    """
+
+    def _make(self, **overrides):
+        payload = {"name": "Main Warehouse", "code": "WH-MAIN"}
+        payload.update(overrides)
+        return warehouses.create_warehouse(**payload)
+
+    def test_a_warehouse_can_be_created_with_an_address_and_a_point(self):
+        warehouse = self._make(
+            address="12 Dock Road, Kolkata", latitude="22.5726", longitude="88.3639"
+        )
+        self.assertEqual(warehouse.address, "12 Dock Road, Kolkata")
+        self.assertEqual(warehouse.latitude, Decimal("22.572600"))
+        self.assertEqual(warehouse.longitude, Decimal("88.363900"))
+        # Typed by a human, not resolved from the address.
+        self.assertIsNone(warehouse.geocoded_at)
+
+    def test_coordinates_are_optional(self):
+        """Every row that predates this feature has none, and allocation still
+        has to work for them."""
+        warehouse = self._make(address="No coordinates yet")
+        self.assertIsNone(warehouse.latitude)
+        self.assertIsNone(warehouse.longitude)
+
+    def test_half_a_coordinate_pair_is_refused(self):
+        """A latitude with no longitude would read as the prime meridian — a
+        confidently wrong position, worse than no position."""
+        with self.assertRaises(ValidationError):
+            self._make(latitude="22.5726")
+        with self.assertRaises(ValidationError):
+            self._make(longitude="88.3639")
+
+    def test_out_of_range_coordinates_are_refused(self):
+        with self.assertRaises(ValidationError):
+            self._make(latitude="120", longitude="10")
+        with self.assertRaises(ValidationError):
+            self._make(latitude="10", longitude="200")
+
+    def test_codes_are_upper_cased_and_unique_case_insensitively(self):
+        self._make(code="wh-main")
+        self.assertEqual(Warehouse.objects.get().code, "WH-MAIN")
+        with self.assertRaises(ValidationError):
+            self._make(name="Another", code="Wh-Main")
+
+    def test_names_are_unique_case_insensitively(self):
+        self._make()
+        with self.assertRaises(ValidationError):
+            self._make(name="main warehouse", code="WH-2")
+
+    def test_a_zero_cost_weight_is_refused(self):
+        """The splitter sorts on it and multiplies by it — zero makes every
+        warehouse look free and identical."""
+        with self.assertRaises(ValidationError):
+            self._make(shipping_cost_weight="0")
+        with self.assertRaises(ValidationError):
+            self._make(shipping_cost_weight="-1")
+
+    def test_negative_lead_time_and_cost_are_refused(self):
+        with self.assertRaises(ValidationError):
+            self._make(base_shipment_cost="-5")
+        with self.assertRaises(ValidationError):
+            self._make(lead_time_days=-1)
+
+    def test_editing_only_touches_the_keys_it_was_given(self):
+        warehouse = self._make(address="Old address", lead_time_days=5)
+        warehouses.update_warehouse(warehouse, address="New address")
+        warehouse.refresh_from_db()
+        self.assertEqual(warehouse.address, "New address")
+        self.assertEqual(warehouse.lead_time_days, 5)
+
+    def test_editing_one_coordinate_validates_it_against_the_stored_other(self):
+        warehouse = self._make(latitude="22.5726", longitude="88.3639")
+        warehouses.update_warehouse(warehouse, latitude="19.0760")
+        warehouse.refresh_from_db()
+        self.assertEqual(warehouse.latitude, Decimal("19.076000"))
+        self.assertEqual(warehouse.longitude, Decimal("88.363900"))
+
+    def test_the_last_active_warehouse_cannot_be_retired(self):
+        """`plan_split` backorders every line when no warehouse is active, so
+        this would break all future allocation from one click."""
+        warehouse = self._make()
+        with self.assertRaises(ValidationError):
+            warehouses.set_active(warehouse, enabled=False)
+
+    def test_retiring_is_allowed_once_a_second_warehouse_exists(self):
+        first = self._make()
+        self._make(name="Depot B", code="WH-B")
+        warehouses.set_active(first, enabled=False)
+        first.refresh_from_db()
+        self.assertFalse(first.is_active)
+        # Retiring never deletes — stock rows and shipped allocations point here.
+        self.assertEqual(Warehouse.objects.count(), 2)
+
+    def test_retired_warehouses_are_still_listed(self):
+        """An admin who cannot see a retired warehouse cannot restore it."""
+        first = self._make()
+        self._make(name="Depot B", code="WH-B")
+        warehouses.set_active(first, enabled=False)
+        self.assertEqual(warehouses.queryset().count(), 2)
+
+
+class BusinessAddressTests(TestCase):
+    def test_a_business_can_be_onboarded_with_a_delivery_address(self):
+        result = businesses.create_business(
+            name="Northwind Traders",
+            contact_email="buyer@northwind.test",
+            address="44 Harbour Street, Mumbai",
+            latitude="19.0760",
+            longitude="72.8777",
+        )
+        self.assertEqual(result.customer.address, "44 Harbour Street, Mumbai")
+        self.assertEqual(result.customer.latitude, Decimal("19.076000"))
+
+    def test_the_address_is_optional(self):
+        result = businesses.create_business(name="Acme", contact_email="b@acme.test")
+        self.assertEqual(result.customer.address, "")
+        self.assertIsNone(result.customer.latitude)
+
+    def test_half_a_coordinate_pair_is_refused_before_the_login_is_minted(self):
+        """Validation runs first, so a bad point cannot leave a portal user
+        behind with no customer row."""
+        with self.assertRaises(ValidationError):
+            businesses.create_business(
+                name="Broken Co", contact_email="b@broken.test", latitude="19.0760"
+            )
+        self.assertFalse(User.objects.filter(email="b@broken.test").exists())

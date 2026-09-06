@@ -14,6 +14,7 @@ import { useEffect } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 
+import { Brand } from "@/components/shell/Brand";
 import { Loading } from "@/components/ui";
 import { useAuth } from "@/lib/auth";
 import { NavigationProvider } from "@/lib/navigation";
@@ -35,8 +36,11 @@ export default function PortalLayout({ children }: { children: React.ReactNode }
     <div className="min-h-screen">
       <nav className="border-b border-blue-400/30 bg-brand">
         <div className="mx-auto flex max-w-5xl items-center gap-3 px-4 py-2.5">
-          <Link href="/portal" className="mr-2 text-lg font-semibold text-white">
-            DealFlow360
+          {/* The same mark the internal app carries. This was bare text, so
+              the portal read as a different product to the one the rep is
+              looking at. */}
+          <Link href="/portal" className="mr-2">
+            <Brand size="sm" />
           </Link>
           {/* This was a dead <span>, so the only way back to the list was the
               browser's back button. "Messages" and "Profile" sat beside it as

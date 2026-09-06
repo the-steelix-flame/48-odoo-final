@@ -1,10 +1,33 @@
-"""Unit tests for the split planner. No database required."""
+"""Fulfillment tests.
+
+`SplitPlannerTests` is pure — no database. `ShippingTests` below needs one,
+because despatch deducts stock and reads billing state.
+"""
 
 from decimal import Decimal
 
-from django.test import SimpleTestCase
+from django.test import SimpleTestCase, TestCase
 
+from apps.accounts import businesses
+from apps.accounts.models import User
+from apps.billing import services as billing
+from apps.billing.api import _lifecycle
+from apps.catalog.models import Product, ProductCategory
+from apps.common.enums import (
+    CustomerTier,
+    FulfillmentStatus,
+    QuotationStatus,
+    Role,
+    StockMoveReason,
+)
+from apps.common.errors import ValidationError
+from apps.fulfillment import services as fulfillment
+from apps.fulfillment.models import StockItem, StockMove, Warehouse
 from apps.fulfillment.planner import Demand, WarehouseStock, plan_split
+from apps.governance.models import CategoryDiscountCeiling, TierDiscountCeiling
+from apps.negotiation import services as negotiation
+from apps.quotations import services as quotations
+from apps.quotations.models import Quotation
 
 
 def wh(wid, name, weight, available, base=Decimal("30")):
@@ -85,3 +108,166 @@ class SplitPlannerTests(SimpleTestCase):
         plan = plan_split([], [wh(MAIN, "Main Warehouse", 1.0, {})])
         self.assertEqual(plan.estimated_shipments, 0)
         self.assertEqual(plan.allocations, [])
+
+
+class ShippingTests(TestCase):
+    """The tail of the lifecycle: confirmed -> invoiced -> paid -> shipped.
+
+    Owner: the-steelix-flame. Nothing wrote `shipped_at` before `mark_shipped`
+    existed, so the Shipped milestone was unreachable — the invoice stepper
+    showed it grey forever and orders never left the fulfillment queue.
+    """
+
+    def setUp(self):
+        self.rep = User.objects.create_user(
+            email="rep@ship.test", password="x", full_name="Rep", role=Role.SALES_REP
+        )
+        self.finance = User.objects.create_user(
+            email="fin@ship.test", password="x", full_name="Fin", role=Role.FINANCE
+        )
+        result = businesses.create_business(
+            name="Ship Co", contact_email="buyer@ship.test", tier=CustomerTier.GOLD
+        )
+        self.customer = result.customer
+        self.buyer = result.portal_user
+
+        TierDiscountCeiling.objects.create(
+            tier=CustomerTier.GOLD, max_discount_percent=Decimal("15")
+        )
+        category = ProductCategory.objects.create(name="Hardware", code="HARDWARE")
+        CategoryDiscountCeiling.objects.create(
+            category=category, max_discount_percent=Decimal("15")
+        )
+        self.product = Product.objects.create(
+            name="Laptop", sku="HW-SHIP", category=category,
+            base_price=Decimal("1000"), cost_price=Decimal("600"), tax_percent=Decimal("0"),
+        )
+        self.warehouse = Warehouse.objects.create(
+            name="Main Warehouse", code="MAIN", base_shipment_cost=Decimal("30")
+        )
+        self.stock = StockItem.objects.create(
+            warehouse=self.warehouse, product=self.product, quantity_on_hand=10
+        )
+
+    def _confirmed(self):
+        quotation = quotations.create_quotation(customer=self.customer, owner_rep=self.rep)
+        quotations.add_line(
+            quotation, product_id=self.product.id, quantity=Decimal("2"),
+            discount_percent=Decimal("5"), actor=self.rep,
+        )
+        quotations.submit(quotation, actor=self.rep)
+        negotiation.send_to_customer(quotation, actor=self.rep)
+        negotiation.confirm_by_customer(quotation, actor=self.buyer)
+        quotation.refresh_from_db()
+        return quotation
+
+    def _paid_order(self):
+        """A confirmed, billed and settled order with an accepted split."""
+        quotation = self._confirmed()
+        billing.raise_bill_for_quotation(quotation, actor=self.finance)
+        negotiation.pay_bill(quotation, actor=self.buyer)
+
+        plan = quotation.fulfillment_plans.first()
+        fulfillment.accept_plan(plan, actor=self.finance)
+        plan.refresh_from_db()
+        return quotation, plan
+
+    def test_an_unpaid_order_is_not_shipped(self):
+        """The rule the lifecycle rests on: goods leave after the money arrives.
+        Shipping is the one step that cannot be taken back."""
+        quotation = self._confirmed()
+        plan = quotation.fulfillment_plans.first()
+        fulfillment.accept_plan(plan, actor=self.finance)
+        plan.refresh_from_db()
+
+        with self.assertRaises(ValidationError):
+            fulfillment.mark_shipped(plan, actor=self.finance)
+
+    def test_an_unaccepted_split_cannot_ship(self):
+        quotation = self._confirmed()
+        plan = quotation.fulfillment_plans.first()
+
+        with self.assertRaises(ValidationError):
+            fulfillment.mark_shipped(plan, actor=self.finance)
+
+    def test_shipping_a_paid_order_stamps_every_allocation(self):
+        _, plan = self._paid_order()
+        fulfillment.mark_shipped(plan, actor=self.finance)
+        plan.refresh_from_db()
+
+        self.assertEqual(plan.status, FulfillmentStatus.SHIPPED)
+        self.assertFalse(plan.allocations.filter(shipped_at__isnull=True).exists())
+
+    def test_shipping_deducts_stock_and_clears_the_reservation(self):
+        """`_reserve` raised `reserved` without touching `on_hand`, because a
+        reservation is a promise. Shipping is the movement, so both drop —
+        releasing the reservation alone would hand the same units out twice."""
+        _, plan = self._paid_order()
+        self.stock.refresh_from_db()
+        self.assertEqual(self.stock.quantity_on_hand, 10)
+        self.assertEqual(self.stock.quantity_reserved, 2)
+
+        fulfillment.mark_shipped(plan, actor=self.finance)
+
+        self.stock.refresh_from_db()
+        self.assertEqual(self.stock.quantity_on_hand, 8)
+        self.assertEqual(self.stock.quantity_reserved, 0)
+        self.assertEqual(self.stock.available, 8)
+
+    def test_shipping_records_a_stock_move(self):
+        _, plan = self._paid_order()
+        fulfillment.mark_shipped(plan, actor=self.finance)
+
+        move = StockMove.objects.filter(
+            stock_item=self.stock, reason=StockMoveReason.SHIP
+        ).get()
+        self.assertEqual(move.delta, -2)
+
+    def test_shipping_twice_is_refused(self):
+        _, plan = self._paid_order()
+        fulfillment.mark_shipped(plan, actor=self.finance)
+        plan.refresh_from_db()
+
+        with self.assertRaises(ValidationError):
+            fulfillment.mark_shipped(plan, actor=self.finance)
+
+    def test_a_shipped_order_leaves_the_fulfillment_queue(self):
+        """The reported bug: the queue listed every confirmed order forever, so
+        a fully despatched one sat there with nothing left to do."""
+        quotation, plan = self._paid_order()
+
+        def queued():
+            ids = []
+            for q in Quotation.objects.filter(status=QuotationStatus.CONFIRMED):
+                p = q.fulfillment_plans.first()
+                if p is None or p.status != FulfillmentStatus.SHIPPED:
+                    ids.append(q.id)
+            return ids
+
+        self.assertIn(quotation.id, queued())
+        fulfillment.mark_shipped(plan, actor=self.finance)
+        self.assertNotIn(quotation.id, queued())
+
+    def test_the_customer_is_told_once_it_has_actually_been_despatched(self):
+        quotation, plan = self._paid_order()
+        self.assertIn("being prepared", negotiation.portal_shipping(quotation))
+
+        fulfillment.mark_shipped(plan, actor=self.finance)
+        quotation.refresh_from_db()
+
+        after = negotiation.portal_shipping(quotation)
+        self.assertIn("despatched", after)
+        self.assertIn("Main Warehouse", after)
+
+    def test_the_invoice_lifecycle_runs_confirmed_invoiced_paid_shipped(self):
+        """Shipped used to sit second, reading as though goods went out before
+        anyone had been billed."""
+        quotation, plan = self._paid_order()
+        fulfillment.mark_shipped(plan, actor=self.finance)
+
+        stages = _lifecycle(billing.bill_for(quotation))
+        self.assertEqual(
+            [s["label"] for s in stages],
+            ["Order Confirmed", "Invoiced", "Paid", "Shipped"],
+        )
+        self.assertTrue(all(s["done"] for s in stages))

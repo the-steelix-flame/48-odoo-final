@@ -24,6 +24,16 @@ class PortalToken(TimeStampedModel):
     )
     expires_at = models.DateTimeField(null=True, blank=True)
     used_at = models.DateTimeField(null=True, blank=True)
+    #: The figures this link was issued for — see `negotiation.services.
+    #: snapshot_terms`. A token is minted at the moment a quotation is sent, so
+    #: it is exactly the right place to record what the customer was shown.
+    #:
+    #: The portal used to read the LIVE quotation, which meant internal work
+    #: leaked out of the building: a rep accepting a counter rewrote the order
+    #: discount, and the customer's screen changed to match before anyone had
+    #: sent them anything. What a customer sees should change when we send
+    #: them something, and at no other time.
+    terms_snapshot = models.JSONField(null=True, blank=True)
 
     class Meta:
         db_table = "portal_token"

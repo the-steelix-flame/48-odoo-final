@@ -19,6 +19,7 @@ from apps.common.enums import (
     SubscriptionStatus,
 )
 from apps.common.errors import ValidationError
+from apps.quotations import services as quotation_services
 from apps.quotations.models import Quotation
 from apps.subscriptions.models import RecurringPlan, Subscription, SubscriptionEvent
 from apps.subscriptions.proration import (
@@ -34,7 +35,9 @@ def _period_of(subscription: Subscription) -> Period:
 
 
 @transaction.atomic
-def activate_from_quotation(quotation: Quotation, *, actor=None) -> list[Subscription]:
+def activate_from_quotation(
+    quotation: Quotation, *, actor=None, issue_invoices: bool = True
+) -> list[Subscription]:
     """Turn every RECURRING line on a confirmed order into a subscription.
 
     Each one gets its own billing schedule, separate from the order's one-time
@@ -42,6 +45,10 @@ def activate_from_quotation(quotation: Quotation, *, actor=None) -> list[Subscri
     """
     created: list[Subscription] = []
     today = timezone.now().date()
+    # Same reason as the one-time invoice: the negotiated figure sits on
+    # `order_discount_percent`, so a subscription priced off `line_total` alone
+    # would bill the rate from before the negotiation — every period, forever.
+    factor = quotation_services.order_discount_factor(quotation)
 
     for line in quotation.lines.filter(line_type=LineType.RECURRING).select_related(
         "product", "recurring_plan"
@@ -60,9 +67,10 @@ def activate_from_quotation(quotation: Quotation, *, actor=None) -> list[Subscri
             plan=plan,
             product=line.product,
             quantity=line.quantity,
-            # Net of the discount the rep gave — the subscription inherits the
-            # negotiated price, not the list price.
-            unit_price=Decimal(line.line_total) / Decimal(line.quantity),
+            # Net of the discount the rep gave AND of anything agreed at the
+            # order level — the subscription inherits the negotiated price, not
+            # the list price.
+            unit_price=(Decimal(line.line_total) * factor) / Decimal(line.quantity),
             start_date=today,
             current_period_start=period.start,
             current_period_end=period.end,
@@ -77,7 +85,10 @@ def activate_from_quotation(quotation: Quotation, *, actor=None) -> list[Subscri
             actor=actor,
             note=f"Created from {quotation.number}",
         )
-        if plan.bill_in_advance:
+        # `issue_invoices=False` is how the confirm path defers the first
+        # period until Finance signs the deal off. Default stays True so
+        # every other caller behaves exactly as before.
+        if issue_invoices and plan.bill_in_advance:
             billing.issue_recurring_invoice(subscription, period.start, period.end)
         created.append(subscription)
 

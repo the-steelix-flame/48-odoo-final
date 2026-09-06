@@ -11,6 +11,7 @@ things the demo depends on:
 
 from __future__ import annotations
 
+import hashlib
 from decimal import Decimal
 
 from django.db import transaction
@@ -139,6 +140,63 @@ def _tier_ceiling(tier: str) -> Decimal:
 
 
 @transaction.atomic
+def terms_fingerprint(quotation: Quotation) -> str:
+    """What an approver actually signs off, reduced to one comparable string.
+
+    Every input that moves the money is in here and nothing else is. So a
+    change to a price, a quantity, a line discount or the order discount stops
+    matching by itself — there is no invalidation step to remember and
+    therefore none to forget — while sending the quotation, which changes its
+    status but not a single number, leaves the approval standing.
+
+    Note it hashes INPUTS, not the computed totals: `recalculate` rewrites
+    `line_total` constantly without anything having actually changed.
+    """
+    parts = [str(Decimal(quotation.order_discount_percent or 0))]
+    for line in quotation.lines.order_by("id"):
+        parts.append(
+            f"{line.id}:{Decimal(line.quantity)}:{Decimal(line.unit_price)}:"
+            f"{Decimal(line.discount_percent)}"
+        )
+    return hashlib.sha256("|".join(parts).encode()).hexdigest()
+
+
+def mark_terms_approved(quotation: Quotation) -> None:
+    """Record that the CURRENT terms are the approved ones."""
+    quotation.approved_terms_hash = terms_fingerprint(quotation)
+    quotation.save(update_fields=["approved_terms_hash", "updated_at"])
+
+
+def terms_are_approved(quotation: Quotation) -> bool:
+    """True when nothing that affects the money has changed since sign-off."""
+    return bool(quotation.approved_terms_hash) and (
+        quotation.approved_terms_hash == terms_fingerprint(quotation)
+    )
+
+
+def order_discount_factor(quotation: Quotation) -> Decimal:
+    """The multiplier from a line's own net to what is actually charged for it.
+
+    `line_total` is net of that line's OWN discount but not of the order-level
+    one — and the order-level one is exactly where a negotiated figure lands,
+    because `accept_request` and `accept_counter` both write
+    `order_discount_percent` rather than touching the lines. So anything that
+    turns a quotation into money has to apply this, or it bills the price from
+    before the negotiation.
+
+    `recalculate` apportions the order discount by each line's share of the
+    post-line-discount net, which reduces exactly to this single multiplier:
+
+        order_discount_value × (line_total / net_after_lines)
+          = net_after_lines × order% / 100 × line_total / net_after_lines
+          = line_total × order% / 100
+
+    so tax computed from this agrees with the tax on the quotation itself.
+    """
+    order_discount = Decimal(quotation.order_discount_percent or 0)
+    return (HUNDRED - order_discount) / HUNDRED
+
+
 def recalculate(quotation: Quotation) -> Quotation:
     """Recompute money, margin, per-line ceilings and the risk band.
 
@@ -402,6 +460,9 @@ def submit(quotation: Quotation, *, actor=None) -> Quotation:
 
     if not quotation.requires_approval:
         transition(quotation, QuotationStatus.APPROVED, actor=actor)
+        # Clearing every ceiling is an approval too — it just didn't need a
+        # human. Recording it here means these terms survive being sent.
+        mark_terms_approved(quotation)
         record_event(
             quotation,
             QuotationEventType.AUTO_APPROVED,
@@ -428,7 +489,12 @@ def submit(quotation: Quotation, *, actor=None) -> Quotation:
 
 @transaction.atomic
 def confirm(quotation: Quotation, *, actor=None) -> dict:
-    """Confirm the order: fulfillment + subscriptions + invoices, in one step.
+    """Confirm the order: fulfillment + subscription records, in one step.
+
+    Deliberately does NOT bill. A confirmed deal still has to be signed off by
+    Finance or a Sales Manager, and raising the paperwork before that means
+    billing a customer for terms nobody internal has accepted yet. The invoice
+    is raised by `billing.raise_bill_for_quotation`.
 
     This is the seam where all three lanes meet, so it lives here and calls
     outward rather than each lane reaching in. Imports are local because
@@ -436,7 +502,6 @@ def confirm(quotation: Quotation, *, actor=None) -> dict:
 
     Returns a summary the API and the demo script can both read.
     """
-    from apps.billing import services as billing
     from apps.fulfillment import services as fulfillment
     from apps.subscriptions import services as subscriptions
 
@@ -454,7 +519,23 @@ def confirm(quotation: Quotation, *, actor=None) -> dict:
     # A counter-offer may have pushed this back over a ceiling while it sat in
     # the portal. Re-score before committing rather than trusting the old band.
     recalculate(quotation)
-    if quotation.requires_approval and quotation.status != QuotationStatus.APPROVED:
+    # Approval attaches to the TERMS as well as to the status.
+    #
+    # `status == APPROVED` alone was the whole test, and it is still necessary:
+    # APPROVED -> PENDING_APPROVAL is not a legal transition, so re-approving
+    # from there raises rather than reopening anything.
+    #
+    # But it was not sufficient. `send_to_customer` moves an approved quote
+    # APPROVED -> SENT, so the approval was thrown away the instant the offer
+    # went out: a discount that Sales Manager and Finance had both signed off
+    # went to the customer, and the customer accepting it put the identical
+    # figures straight back in the queue for the same two people. A discount
+    # only ever reaches a customer after approval, so their yes is the last one
+    # needed and the order should go to fulfillment.
+    already_cleared = (
+        quotation.status == QuotationStatus.APPROVED or terms_are_approved(quotation)
+    )
+    if quotation.requires_approval and not already_cleared:
         transition(quotation, QuotationStatus.PENDING_APPROVAL, actor=actor)
         from apps.approvals.services import open_approval_request
 
@@ -471,8 +552,11 @@ def confirm(quotation: Quotation, *, actor=None) -> dict:
     transition(quotation, QuotationStatus.CONFIRMED, actor=actor)
 
     plan = fulfillment.suggest_plan(quotation)
-    created_subscriptions = subscriptions.activate_from_quotation(quotation, actor=actor)
-    invoice = billing.issue_one_time_invoice(quotation, actor=actor)
+    # Subscription records exist from here so the schedule is visible, but the
+    # first invoice waits for the same sign-off as the one-time lines.
+    created_subscriptions = subscriptions.activate_from_quotation(
+        quotation, actor=actor, issue_invoices=False
+    )
 
     record_event(
         quotation,
@@ -480,14 +564,16 @@ def confirm(quotation: Quotation, *, actor=None) -> dict:
         actor=actor,
         fulfillment_plan_id=plan.id,
         subscriptions=len(created_subscriptions),
-        invoice=invoice.number if invoice else None,
     )
     return {
         "confirmed": True,
         "quotation": quotation,
         "fulfillment_plan_id": plan.id,
         "subscription_ids": [s.id for s in created_subscriptions],
-        "invoice_id": invoice.id if invoice else None,
+        # Always None now. Confirming no longer bills — Finance or a Sales
+        # Manager raises the bill afterwards. Kept in the payload so existing
+        # callers keep the same shape rather than a KeyError.
+        "invoice_id": None,
     }
 
 

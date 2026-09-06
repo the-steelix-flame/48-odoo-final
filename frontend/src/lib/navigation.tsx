@@ -25,6 +25,38 @@ import {
 } from "react";
 import { usePathname, useRouter } from "next/navigation";
 
+/**
+ * Screens the nav itself lands on. Back is meaningless on one of these: the
+ * sidebar or portal nav already gets you here in a click, and "back" from a
+ * home screen offers to leave the place you just chose to be — the portal
+ * quotation list showed a Back button that returned you to a quotation you had
+ * deliberately navigated out of.
+ *
+ * Kept here rather than passed per page so it cannot drift: a new screen is
+ * either a nav destination and listed, or it is a detail view and gets Back.
+ */
+const NAV_ROOTS = new Set([
+  // Portal
+  "/portal",
+  "/portal/profile",
+  // Internal
+  "/dashboard",
+  "/quotations",
+  "/approvals",
+  "/negotiations",
+  "/fulfillment",
+  "/subscriptions",
+  "/invoices",
+  "/deal-health",
+  "/reports",
+  "/products",
+  "/admin/users",
+  "/admin/businesses",
+  "/admin/plans",
+  "/admin/warehouses",
+  "/settings/discounts",
+]);
+
 type NavigationState = {
   canGoBack: boolean;
   goBack: () => void;
@@ -56,7 +88,9 @@ export function NavigationProvider({ children }: { children: React.ReactNode }) 
   const goBack = useCallback(() => router.back(), [router]);
 
   return (
-    <NavigationContext.Provider value={{ canGoBack, goBack }}>
+    <NavigationContext.Provider
+      value={{ canGoBack: canGoBack && !NAV_ROOTS.has(pathname), goBack }}
+    >
       {children}
     </NavigationContext.Provider>
   );

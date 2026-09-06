@@ -5,6 +5,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
+import { Brand } from "@/components/shell/Brand";
 import { useAuth } from "@/lib/auth";
 import { useApi } from "@/lib/useApi";
 import type {
@@ -54,7 +55,16 @@ export function Sidebar() {
     // no way to tell which one it had left out.
     { href: "/quotations", label: "Quotations", badge: quotations?.length },
     { href: "/approvals", label: "Approvals", badge: approvals?.pending },
-    { href: "/negotiations", label: "Negotiations", badge: negotiations?.length },
+    // Negotiating is the rep's job, and only the rep's. A Sales Manager or
+    // Finance user governs the deal — they approve or refuse the terms the rep
+    // brings them — so haggling directly with the customer would put them on
+    // both sides of their own approval. The API agrees.
+    {
+      href: "/negotiations",
+      label: "Negotiations",
+      badge: negotiations?.length,
+      roles: ["SALES_REP", "ADMIN"],
+    },
     {
       href: "/fulfillment",
       label: "Fulfillment",
@@ -87,6 +97,7 @@ export function Sidebar() {
     { href: "/admin/users", label: "User management", roles: ["ADMIN"] },
     { href: "/admin/businesses", label: "Business management", roles: ["ADMIN"] },
     { href: "/admin/plans", label: "Subscription plans", roles: ["ADMIN"] },
+    { href: "/admin/warehouses", label: "Warehouse management", roles: ["ADMIN"] },
     {
       href: "/settings/discounts",
       label: "Discount & approval rules",
@@ -100,14 +111,8 @@ export function Sidebar() {
 
   return (
     <aside className="sticky top-0 flex h-screen w-[240px] shrink-0 flex-col gap-1 overflow-auto border-r border-[#1b2a3c] bg-gradient-to-b from-[#24354c] to-[#2c4459] p-[18px_14px]">
-      <Link href="/dashboard" className="mb-[12px] flex items-center gap-[10px] p-[6px_8px_18px]">
-        <div className="relative flex h-[28px] w-[28px] shrink-0 items-center justify-center rounded-[9px] bg-gradient-to-br from-[#22D3EE] via-[#0891B2] to-[#0E7490] shadow-[inset_0_0_0_1px_rgba(255,255,255,0.34),0_8px_18px_-10px_rgba(8,145,178,0.9)]">
-          <div className="h-[12px] w-[12px] rotate-45 rounded-[2px] bg-[#F8FAFC]"></div>
-          <div className="absolute bottom-[4px] right-[4px] h-[5px] w-[5px] rounded-full bg-[#0F172A]"></div>
-        </div>
-        <span className="font-heading text-[16px] font-semibold tracking-[-0.02em] text-[#F8FAFC]">
-          DealFlow<span className="text-[#22D3EE]">360</span>
-        </span>
+      <Link href="/dashboard" className="mb-[12px] block p-[6px_8px_18px]">
+        <Brand size="sm" />
       </Link>
 
       {visible.map((item) => {
