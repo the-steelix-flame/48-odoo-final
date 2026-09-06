@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32" role="img" aria-label="DealFlow360">
+  <!--
+    The BrandMark from components/shell/Brand.tsx, rebuilt as SVG.
+
+    The sidebar mark is composed from CSS - a gradient div, a rotated inner div
+    and an absolutely positioned dot - so it cannot simply be pointed at. This
+    redraws the same three shapes at the same proportions (the `sm` size, 28px,
+    scaled to a 32px canvas) so the tab icon and the sidebar are recognisably
+    one mark rather than two similar ones.
+
+    Next.js App Router serves any app/icon.svg as the favicon automatically;
+    no <link> tag is needed.
+  -->
+  <defs>
+    <!-- matches bg-gradient-to-br from-#22D3EE via-#0891B2 to-#0E7490 -->
+    <linearGradient id="df" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#22D3EE"/>
+      <stop offset="0.5" stop-color="#0891B2"/>
+      <stop offset="1" stop-color="#0E7490"/>
+    </linearGradient>
+  </defs>
+
+  <!-- the rounded square -->
+  <rect width="32" height="32" rx="10.3" fill="url(#df)"/>
+
+  <!--
+    The inset white hairline. Drawn at 1.2 rather than the CSS 1px: at 16px,
+    where a favicon actually lives, a true 1px ring disappears entirely.
+  -->
+  <rect x="0.6" y="0.6" width="30.8" height="30.8" rx="9.7"
+        fill="none" stroke="#FFFFFF" stroke-opacity="0.34" stroke-width="1.2"/>
+
+  <!-- the centre diamond: a rounded square turned 45 degrees -->
+  <rect x="9.15" y="9.15" width="13.7" height="13.7" rx="3.4"
+        fill="#F8FAFC" transform="rotate(45 16 16)"/>
+
+  <!-- the dark dot, bottom-right, inset to match the CSS -->
+  <circle cx="24.55" cy="24.55" r="2.85" fill="#0F172A"/>
+</svg>
