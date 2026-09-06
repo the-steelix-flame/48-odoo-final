@@ -27,6 +27,50 @@ from apps.quotations.models import Quotation
 TOKEN_TTL_DAYS = 30
 
 
+def snapshot_terms(quotation: Quotation) -> dict:
+    """The customer-facing figures, frozen at the moment of sending.
+
+    Decimals are stored as strings: JSON has no decimal type, and rounding
+    money through a float on the way in or out is not a trade worth making.
+    """
+    subtotal = Decimal(quotation.subtotal or 0)
+    discount_total = Decimal(quotation.discount_total or 0)
+    effective = (
+        (discount_total / subtotal * Decimal("100")).quantize(Decimal("0.01"))
+        if subtotal
+        else Decimal("0.00")
+    )
+    return {
+        "subtotal": str(subtotal),
+        "discount_total": str(discount_total),
+        "tax_total": str(Decimal(quotation.tax_total or 0)),
+        "total": str(Decimal(quotation.total or 0)),
+        "effective_discount_percent": str(effective),
+        "lines": [
+            {
+                "id": line.id,
+                "description": line.description,
+                "quantity": str(Decimal(line.quantity)),
+                "unit_price": str(Decimal(line.unit_price)),
+                "discount_percent": str(Decimal(line.discount_percent)),
+                "line_total": str(Decimal(line.line_total)),
+            }
+            for line in quotation.lines.order_by("id")
+        ],
+    }
+
+
+def sent_terms_for(quotation: Quotation) -> dict | None:
+    """What this customer was last actually shown, if anything."""
+    token = (
+        PortalToken.objects.filter(quotation=quotation)
+        .exclude(terms_snapshot=None)
+        .order_by("-created_at")
+        .first()
+    )
+    return token.terms_snapshot if token else None
+
+
 @transaction.atomic
 def send_to_customer(quotation: Quotation, *, actor=None) -> PortalToken:
     """Mint a portal token and move the quote to SENT."""
@@ -37,6 +81,9 @@ def send_to_customer(quotation: Quotation, *, actor=None) -> PortalToken:
         customer=quotation.customer,
         quotation=quotation,
         expires_at=timezone.now() + timedelta(days=TOKEN_TTL_DAYS),
+        # Freeze what we are actually showing them. Everything the rep and the
+        # approvers do afterwards is internal until the next send.
+        terms_snapshot=snapshot_terms(quotation),
     )
     quotation_services.transition(quotation, QuotationStatus.SENT, actor=actor)
     quotation_services.record_event(
@@ -106,7 +153,13 @@ def portal_bill(quotation) -> dict | None:
     """
     from apps.billing import services as billing
 
-    invoice = billing.bill_for(quotation)
+    # Whatever they owe next, of any type — so the second and every later
+    # period of a subscription appears here on its own, with no further
+    # sign-off. Once everything is settled we keep showing the most recent
+    # invoice, because a paid bill is still the customer's receipt.
+    invoice = billing.payable_invoice_for(quotation)
+    if invoice is None:
+        invoice = billing.deal_invoices(quotation).last()
     if invoice is None:
         return None
     return {
@@ -147,8 +200,11 @@ def portal_shipping(quotation) -> str | None:
     """
     from apps.billing import services as billing
 
-    state, _ = billing.billing_state(quotation)
-    if state != billing.BILLING_PAID:
+    # Keyed on the ONE_TIME bill, not the deal's overall state: goods ship
+    # against the goods invoice. Using the deal state would make the despatch
+    # message disappear every time a subscription's next period fell due.
+    goods_bill = billing.bill_for(quotation)
+    if goods_bill is None or goods_bill.status != "PAID":
         return None
 
     plan = quotation.fulfillment_plans.order_by("-created_at").first()
@@ -191,9 +247,9 @@ def pay_bill(quotation, *, actor, reference: str = "") -> None:
     """The customer settles their bill in full from the portal."""
     from apps.billing import services as billing
 
-    invoice = billing.bill_for(quotation)
+    invoice = billing.payable_invoice_for(quotation)
     if invoice is None:
-        raise ValidationError("There is no bill to pay on this order yet.")
+        raise ValidationError("There is nothing outstanding on this order.")
     if invoice.status == "PAID":
         raise ValidationError("This bill has already been paid.")
     if invoice.amount_due <= 0:

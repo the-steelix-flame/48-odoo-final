@@ -7,6 +7,7 @@ import { useRouter } from "next/navigation";
 
 import { ApiError } from "@/lib/api";
 import { landingPathFor, useAuth } from "@/lib/auth";
+import { Brand } from "@/components/shell/Brand";
 import { Button, Field, Note, inputClass } from "@/components/ui";
 import type { Role } from "@/types";
 
@@ -63,15 +64,7 @@ export default function LoginPage() {
         <div className="absolute bottom-[-10%] right-[-10%] w-[60%] h-[60%] rounded-full bg-[radial-gradient(circle,rgba(16,185,129,0.1)_0%,transparent_70%)] blur-[40px]"></div>
         
         <div className="relative z-10">
-          <div className="flex items-center gap-3">
-            <div className="relative flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-[#22D3EE] via-[#0891B2] to-[#0E7490] shadow-[inset_0_0_0_1px_rgba(255,255,255,0.34),0_8px_18px_-10px_rgba(8,145,178,0.9)]">
-              <div className="h-[18px] w-[18px] rotate-45 rounded-[3px] bg-[#F8FAFC]"></div>
-              <div className="absolute bottom-[6px] right-[6px] h-2 w-2 rounded-full bg-[#0F172A]"></div>
-            </div>
-            <span className="font-heading text-2xl font-semibold tracking-[-0.02em] text-[#F8FAFC]">
-              DealFlow<span className="text-[#22D3EE]">360</span>
-            </span>
-          </div>
+          <Brand size="lg" />
           <h1 className="mt-16 font-heading text-4xl font-bold leading-[1.1] text-white">
             Intelligent quoting <br />
             <span className="text-[#9CAABC]">without the friction.</span>

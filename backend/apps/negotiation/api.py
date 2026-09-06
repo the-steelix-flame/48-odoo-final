@@ -13,7 +13,7 @@ from decimal import Decimal
 from ninja import Router, Schema
 
 from apps.accounts.auth import any_auth, internal_auth, require_role
-from apps.common.enums import Role
+from apps.common.enums import NegotiationRequestStatus, QuotationStatus, Role
 from apps.common.errors import NotFound
 from apps.negotiation import services
 from apps.negotiation.models import NegotiationRequest
@@ -252,6 +252,44 @@ def _portal_payload(quotation: Quotation) -> dict:
         # answered it.
         action_required = True
         label = "Terms agreed — ready for your confirmation"
+
+    # The customer asked for a number and we simply said yes. To them that is a
+    # settled answer, not a negotiation still running, and the portal was
+    # describing it in negotiation language either way. Only where we accepted
+    # THEIR figure — a countered round is a different conversation, and one we
+    # already label above.
+    latest_request = quotation.negotiation_requests.order_by("-created_at").first()
+    plainly_accepted = (
+        open_request is None
+        and latest_request is not None
+        and latest_request.status == NegotiationRequestStatus.ACCEPTED
+        and latest_request.counter_discount_percent is None
+    )
+    # Not while it is still with our approvers: "accepted" would be true of the
+    # request and misleading about the deal.
+    if plainly_accepted and quotation.status in (
+        QuotationStatus.SENT,
+        QuotationStatus.APPROVED,
+        QuotationStatus.UNDER_NEGOTIATION,
+    ):
+        label = "Your request was accepted"
+        action_required = True
+    # What the customer is shown is what we last SENT them, not wherever the
+    # deal has since got to internally. A rep accepting a counter rewrites the
+    # order discount immediately — the approvers need the real number — but
+    # until someone presses "Send to customer" again, none of that is the
+    # customer's to see. Falls back to live figures for a quotation with no
+    # snapshot, which is any that predates this.
+    sent = services.sent_terms_for(quotation)
+    money = sent or {
+        "subtotal": quotation.subtotal,
+        "discount_total": quotation.discount_total,
+        "tax_total": quotation.tax_total,
+        "total": quotation.total,
+        "effective_discount_percent": _effective_discount(quotation),
+        "lines": list(quotation.lines.all()),
+    }
+
     return {
         "id": quotation.id,
         "number": quotation.number,
@@ -259,16 +297,16 @@ def _portal_payload(quotation: Quotation) -> dict:
         "status_label": label,
         "action_required": action_required,
         "currency": quotation.currency,
-        "subtotal": quotation.subtotal,
-        "discount_total": quotation.discount_total,
-        "tax_total": quotation.tax_total,
-        "total": quotation.total,
+        "subtotal": money["subtotal"],
+        "discount_total": money["discount_total"],
+        "tax_total": money["tax_total"],
+        "total": money["total"],
         "valid_until": quotation.valid_until,
-        "effective_discount_percent": _effective_discount(quotation),
+        "effective_discount_percent": money["effective_discount_percent"],
         "company_name": quotation.customer.name,
         "bill": services.portal_bill(quotation),
         "shipping_status": services.portal_shipping(quotation),
-        "lines": list(quotation.lines.all()),
+        "lines": money["lines"],
         "timeline": services.negotiation_timeline(quotation),
         "requests": list(quotation.negotiation_requests.all()),
         "open_request": open_request,
@@ -306,6 +344,9 @@ def portal_list_quotations(request):
     rows = []
     for quotation in services.portal_quotations_for(request.auth):
         label, action_required = services.portal_status_for(quotation)
+        # Same rule as the detail view: the list shows what was sent, so a
+        # total cannot move here while an internal decision is still in flight.
+        sent = services.sent_terms_for(quotation)
         rows.append(
             {
                 "id": quotation.id,
@@ -314,10 +355,16 @@ def portal_list_quotations(request):
                 "status_label": label,
                 "action_required": action_required,
                 "currency": quotation.currency,
-                "total": quotation.total,
-                "line_count": quotation.lines.count(),
+                "total": sent["total"] if sent else quotation.total,
+                "line_count": (
+                    len(sent["lines"]) if sent else quotation.lines.count()
+                ),
                 "sent_at": getattr(quotation, "sent_at", None),
-                "effective_discount_percent": _effective_discount(quotation),
+                "effective_discount_percent": (
+                    sent["effective_discount_percent"]
+                    if sent
+                    else _effective_discount(quotation)
+                ),
             }
         )
     return rows

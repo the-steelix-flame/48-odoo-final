@@ -1449,6 +1449,111 @@ working.
 
 ---
 
+### The intermittent 500 on the dashboard
+
+Two causes, both from the same design choice: `/insights/dashboard` calls
+`run_sweep()`, so **a GET performs writes** — and signing in fires several API
+calls at once, which is exactly when they collide.
+
+*SQLite locking.* The local database runs in the default rollback-journal mode,
+where a writer takes an exclusive lock on the whole file. A concurrent request
+got `database is locked` immediately. Now `journal_mode=WAL` with a 20s busy
+timeout: readers run alongside the writer, and a second writer waits its turn.
+Reproduced with 30 concurrent dashboard loads — 8 of 8 sweeps failed before,
+0 of 30 requests fail now.
+
+*A check-then-create race.* `_upsert_alert` looked for an open alert and then
+inserted, with no atomicity, against the partial unique constraint
+`unique_open_alert_per_quotation_type`. Two sweeps both found nothing and both
+inserted; the second was refused. The insert now takes its own savepoint — a
+failed statement aborts the surrounding transaction on Postgres, so recovering
+without one would strand the rest of the sweep — and falls back to the row the
+other sweep created. This is the cause that matters on Supabase, where the
+SQLite fix does nothing.
+
+The dashboard also no longer dies if the sweep fails: the counts are read from
+the table either way, so a lost race leaves them seconds stale. Answering 500
+because a background refresh collided is the one outcome that is certainly
+wrong.
+
+---
+
+### One logo, three surfaces
+
+The mark was hand-rolled twice, at different sizes, in the sidebar and the
+login panel — and the customer portal had no mark at all, just the words. The
+portal therefore looked like a different product from the one the rep was
+signed in to. `components/shell/Brand.tsx` now defines it once, in three sizes,
+and all three surfaces use it.
+
+---
+
+### A subscription deal could never be paid
+
+Two faults, one deal shape.
+
+**Finance saw a red error for a deal it had just billed.** For an order with no
+one-time lines, `raise_bill_for_quotation` released the recurring schedule and
+*then* raised `ValidationError` to explain itself. But it is `@transaction.
+atomic`, so raising rolled the release back — the message said "its recurring
+schedule has been released" while undoing exactly that. Q-1014 sat at
+AWAITING_BILL with zero invoices and a red banner. Releasing the schedule is
+the whole job for a subscription deal, so it now returns the first period's
+invoice instead of raising.
+
+**The customer had a live subscription and nothing they could pay.**
+`portal_bill` keyed on `bill_for`, which is ONE_TIME only — correct for "have
+the goods been paid for", useless as "what do I owe". Split in two:
+
+| Function | Answers |
+|---|---|
+| `bill_for` | The one-off goods bill. Still ONE_TIME; despatch turns on it. |
+| `payable_invoice_for` | The next invoice owed, of any type. Drives the portal. |
+
+`billing_state` now reads every invoice type, so a recurring deal returns to
+PAYMENT_PENDING each period — that is the schedule working, not the deal
+reopening. **Finance signs off once**; every period after that invoices itself
+via `renew()` and becomes payable with nobody touching it, which is what a
+schedule is for. `portal_shipping` was re-keyed onto `bill_for` so the despatch
+message doesn't vanish each time a period falls due.
+
+Verified on Q-1014 in a rolled-back transaction: it now bills as INV-1047
+(RECURRING, $3,818.00) and the customer immediately has something to pay.
+
+---
+
+### The customer's screen no longer moves while we are still deciding
+
+Reported on Q-1015, and its timestamps make it plain:
+
+```
+23:42:38  customer asks for 20%
+23:42:49  rep accepts        ← order discount rewritten, portal changes NOW
+23:46:13  SENT_TO_CUSTOMER   ← when the customer should actually have seen it
+```
+
+For three and a half minutes the customer was looking at terms nobody had sent
+them, produced by an internal decision that had not yet cleared approval.
+
+The portal read the live quotation. It now reads what was last **sent**:
+`PortalToken.terms_snapshot` (migration `negotiation/0008`) freezes the
+customer-facing figures at the moment a token is minted — which is the moment
+of sending, so the token is exactly the right place for it. Both the portal
+detail view and the list use it, falling back to live figures for quotations
+that predate the field.
+
+Decimals are stored as strings; JSON has no decimal type and rounding money
+through a float is not a trade worth making.
+
+**And an accepted request stops reading as a negotiation.** When we simply say
+yes to the customer's own figure, the portal now says *"Your request was
+accepted"* rather than describing an exchange that is over. Only where we
+accepted their number — a countered round is a different conversation, already
+labelled — and not while the deal is still with our approvers, where
+"accepted" would be true of the request and misleading about the deal.
+
+---
+
 ## 7. Migrations added by this lane
 
 Anyone pulling this must run `python manage.py migrate`:
@@ -1460,6 +1565,7 @@ Anyone pulling this must run `python manage.py migrate`:
 | `negotiation/0005_negotiationevent` | The append-only negotiation log. |
 | `negotiation/0006_backfill_negotiation_events` | Reconstructs existing conversations into it. Data migration, reversible. |
 | `quotations/0005_quotation_approved_terms_hash` | Pins an approval to the terms it approved, so sending the quote doesn't discard it. |
+| `negotiation/0008_portaltoken_terms_snapshot` | Freezes the figures a customer was actually sent, so internal decisions stop leaking into the portal. |
 
 Business and user management deliberately needed **no** migration; they reuse `User.is_active`,
 `User.date_joined` and `Customer.portal_user`.

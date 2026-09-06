@@ -29,6 +29,8 @@ from apps.negotiation import api as negotiation_api
 from apps.negotiation import services as negotiation
 from apps.quotations import services as quotation_services
 from apps.quotations import services as quotations
+from apps.subscriptions import services as subscriptions
+from apps.subscriptions.models import RecurringPlan
 
 
 def _effective_discount(quotation) -> Decimal:
@@ -935,6 +937,137 @@ class ApprovedTermsTests(PortalTestBase):
         before = quotation_services.terms_fingerprint(quotation)
         quotation_services.recalculate(quotation)
         self.assertEqual(quotation_services.terms_fingerprint(quotation), before)
+
+
+class SentTermsTests(PortalTestBase):
+    """What a customer sees changes when we send them something, and never
+    otherwise.
+
+    The portal read the LIVE quotation, so internal work leaked out of the
+    building: a rep accepting a counter rewrote the order discount and the
+    customer's screen changed to match, minutes before anyone pressed
+    "Send to customer".
+    """
+
+    def _sent(self):
+        quotation = self._quotation()
+        quotations.submit(quotation, actor=self.rep)
+        negotiation.send_to_customer(quotation, actor=self.rep)
+        quotation.refresh_from_db()
+        return quotation
+
+    def test_sending_records_what_the_customer_was_shown(self):
+        quotation = self._sent()
+        sent = negotiation.sent_terms_for(quotation)
+        self.assertIsNotNone(sent)
+        self.assertEqual(Decimal(sent["total"]), quotation.total)
+        self.assertEqual(len(sent["lines"]), 1)
+
+    def test_accepting_a_counter_does_not_move_the_customers_figures(self):
+        """The reported bug. Accepting is internal until it is re-sent."""
+        quotation = self._sent()
+        shown_before = negotiation.sent_terms_for(quotation)
+
+        request = negotiation.submit_request(
+            quotation, actor=self.buyer, requested_discount_percent=Decimal("12")
+        )
+        negotiation.accept_request(request, actor=self.rep)
+        quotation.refresh_from_db()
+
+        # The deal itself really has moved…
+        self.assertGreater(quotation.order_discount_percent, Decimal("0"))
+        # …but nothing the customer is looking at has.
+        self.assertEqual(negotiation.sent_terms_for(quotation), shown_before)
+
+    def test_re_sending_updates_what_the_customer_sees(self):
+        quotation = self._sent()
+        request = negotiation.submit_request(
+            quotation, actor=self.buyer, requested_discount_percent=Decimal("12")
+        )
+        negotiation.accept_request(request, actor=self.rep)
+        quotation.refresh_from_db()
+        if quotation.status != QuotationStatus.APPROVED:
+            quotations.transition(quotation, QuotationStatus.APPROVED, actor=self.rep)
+
+        negotiation.send_to_customer(quotation, actor=self.rep)
+        quotation.refresh_from_db()
+
+        sent = negotiation.sent_terms_for(quotation)
+        self.assertEqual(Decimal(sent["total"]), quotation.total)
+
+
+class RecurringBillingTests(PortalTestBase):
+    """Finance signs a subscription deal off once; every period after that
+    invoices itself and becomes payable with nobody touching it."""
+
+    def setUp(self):
+        super().setUp()
+        self.finance = User.objects.create_user(
+            email="fin@recur.test", password="x", full_name="Fin", role=Role.FINANCE
+        )
+        plan = RecurringPlan.objects.create(
+            name="Care Plan", interval="MONTHLY", bill_in_advance=True
+        )
+        self.service = Product.objects.create(
+            name="Care Plan 2yr", sku="SV-1", category=self.product.category,
+            base_price=Decimal("100"), cost_price=Decimal("40"), tax_percent=Decimal("0"),
+            is_subscription=True, recurring_plan=plan,
+        )
+
+    def _subscription_deal(self):
+        quotation = quotations.create_quotation(customer=self.customer, owner_rep=self.rep)
+        quotations.add_line(
+            quotation, product_id=self.service.id, quantity=Decimal("1"), actor=self.rep
+        )
+        quotations.submit(quotation, actor=self.rep)
+        negotiation.send_to_customer(quotation, actor=self.rep)
+        negotiation.confirm_by_customer(quotation, actor=self.buyer)
+        quotation.refresh_from_db()
+        return quotation
+
+    def test_a_subscription_only_deal_bills_without_erroring(self):
+        """This used to raise AFTER releasing the schedule, so Finance saw a red
+        error for a deal it had just billed correctly."""
+        quotation = self._subscription_deal()
+        invoice = billing.raise_bill_for_quotation(quotation, actor=self.finance)
+
+        self.assertEqual(invoice.invoice_type, InvoiceType.RECURRING)
+        state, _ = billing.billing_state(quotation)
+        self.assertEqual(state, billing.BILLING_PAYMENT_PENDING)
+
+    def test_the_customer_can_pay_a_subscription_period(self):
+        """Keying the portal on the one-time bill left a subscription customer
+        with a live service and nothing they could ever pay."""
+        quotation = self._subscription_deal()
+        billing.raise_bill_for_quotation(quotation, actor=self.finance)
+
+        bill = negotiation.portal_bill(quotation)
+        self.assertIsNotNone(bill)
+        self.assertFalse(bill["is_paid"])
+
+        negotiation.pay_bill(quotation, actor=self.buyer)
+        self.assertEqual(billing.billing_state(quotation)[0], billing.BILLING_PAID)
+
+    def test_the_next_period_becomes_payable_on_its_own(self):
+        """The whole point: no second sign-off from Finance."""
+        quotation = self._subscription_deal()
+        billing.raise_bill_for_quotation(quotation, actor=self.finance)
+        negotiation.pay_bill(quotation, actor=self.buyer)
+        self.assertIsNone(billing.payable_invoice_for(quotation))
+
+        subscription = quotation.subscriptions.get()
+        subscriptions.renew(subscription)
+
+        due = billing.payable_invoice_for(quotation)
+        self.assertIsNotNone(due, "the new period is payable with no Finance action")
+        self.assertEqual(due.invoice_type, InvoiceType.RECURRING)
+        self.assertFalse(negotiation.portal_bill(quotation)["is_paid"])
+
+    def test_billing_the_same_deal_twice_is_still_refused(self):
+        quotation = self._subscription_deal()
+        billing.raise_bill_for_quotation(quotation, actor=self.finance)
+        with self.assertRaises(ValidationError):
+            billing.raise_bill_for_quotation(quotation, actor=self.finance)
 
 
 class NegotiationRoleTests(PortalTestBase):

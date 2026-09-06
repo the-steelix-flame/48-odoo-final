@@ -92,11 +92,11 @@ BILLING_PAID = "PAID"
 
 
 def bill_for(quotation) -> Invoice | None:
-    """The bill raised against this deal, if Finance has raised one.
+    """The one-off bill for the goods on this deal, if one was raised.
 
-    ONE_TIME only. A recurring invoice belongs to a subscription's own
-    schedule and keeps arriving every period, so treating one as "the bill for
-    the deal" would leave the deal permanently unpaid.
+    ONE_TIME only, deliberately: this answers "have the goods been paid for",
+    which is what despatch turns on. A recurring invoice keeps arriving every
+    period, so it can never answer that question.
     """
     return (
         Invoice.objects.filter(quotation=quotation, invoice_type=InvoiceType.ONE_TIME)
@@ -105,14 +105,41 @@ def bill_for(quotation) -> Invoice | None:
     )
 
 
+def deal_invoices(quotation):
+    """Every live invoice raised against this deal, oldest first."""
+    return (
+        Invoice.objects.filter(quotation=quotation)
+        .exclude(status=InvoiceStatus.VOID)
+        .order_by("id")
+    )
+
+
+def payable_invoice_for(quotation) -> Invoice | None:
+    """The next invoice the customer actually owes, of ANY type.
+
+    A subscription deal has no one-time lines at all, so keying the customer's
+    "Make the payment" button on `bill_for` left them with a live subscription
+    and nothing they could ever pay. Each period's invoice becomes payable here
+    the moment it is issued — which is the whole point of a schedule, and needs
+    no further sign-off: Finance released the deal once, and that stands.
+    """
+    return deal_invoices(quotation).exclude(status=InvoiceStatus.PAID).first()
+
+
 def billing_state(quotation) -> tuple[str, Invoice | None]:
-    """Where a confirmed deal stands: awaiting a bill, awaiting payment, paid."""
-    invoice = bill_for(quotation)
-    if invoice is None:
+    """Where a confirmed deal stands: awaiting a bill, awaiting payment, paid.
+
+    Reads every invoice type, not just the one-off. For a recurring deal this
+    legitimately returns to PAYMENT_PENDING each period — that is the schedule
+    working, not the deal reopening.
+    """
+    invoices = list(deal_invoices(quotation))
+    if not invoices:
         return BILLING_AWAITING, None
-    if invoice.status == InvoiceStatus.PAID:
-        return BILLING_PAID, invoice
-    return BILLING_PAYMENT_PENDING, invoice
+    outstanding = next((i for i in invoices if i.status != InvoiceStatus.PAID), None)
+    if outstanding is not None:
+        return BILLING_PAYMENT_PENDING, outstanding
+    return BILLING_PAID, invoices[-1]
 
 
 @transaction.atomic
@@ -132,10 +159,12 @@ def raise_bill_for_quotation(quotation, *, actor=None) -> Invoice:
             f"{quotation.get_status_display().lower()}."
         )
 
-    existing = bill_for(quotation)
+    existing = deal_invoices(quotation).first()
     if existing is not None:
         # Idempotent on purpose: a double click, or two people accepting the
-        # same deal at once, must not raise two bills for one order.
+        # same deal at once, must not raise two bills for one order. Checks
+        # every invoice type, so a subscription-only deal whose schedule is
+        # already running is not "released" a second time.
         raise ValidationError(
             f"{quotation.number} has already been billed as {existing.number}.",
             invoice_id=existing.id,
@@ -144,25 +173,33 @@ def raise_bill_for_quotation(quotation, *, actor=None) -> Invoice:
     invoice = issue_one_time_invoice(quotation, actor=actor)
 
     # The recurring lines were deferred at confirm time for the same reason;
-    # release their first period now that the deal is signed off.
+    # release their first period now that the deal is signed off. This is the
+    # ONLY sign-off the schedule needs — every period after this one invoices
+    # itself and becomes payable without anyone in Finance touching it again.
+    released: list[Invoice] = []
     for subscription in quotation.subscriptions.select_related("plan", "product"):
         if not subscription.plan.bill_in_advance:
             continue
         if subscription.invoices.exists():
             continue
-        issue_recurring_invoice(
-            subscription,
-            subscription.current_period_start,
-            subscription.current_period_end,
+        released.append(
+            issue_recurring_invoice(
+                subscription,
+                subscription.current_period_start,
+                subscription.current_period_end,
+            )
         )
 
     if invoice is None:
-        # Subscription-only order: there are no one-time lines to bill, so the
-        # recurring schedule above is the whole of it. Surfaced rather than
-        # returning None, so the caller never has to guess.
+        if released:
+            # Subscription-only order: the schedule IS the bill, so releasing
+            # it is the whole job. This used to raise — after doing the work —
+            # which showed Finance a red error for a deal it had just billed
+            # correctly, and left the row looking unbilled.
+            return released[0]
         raise ValidationError(
-            f"{quotation.number} has no one-time lines to bill. Its recurring "
-            "schedule has been released and will invoice each period."
+            f"{quotation.number} has nothing to bill: it has no one-time lines "
+            "and no subscription scheduled to invoice."
         )
     return invoice
 
