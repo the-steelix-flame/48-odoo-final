@@ -20,6 +20,7 @@ from apps.common.enums import (
     AlertType,
     QuotationEventType,
     QuotationStatus,
+    RiskBand,
 )
 from apps.insights.models import AlertAction, DealAlert, DealHealthConfig, RepDiscountStat
 from apps.quotations.models import Quotation
@@ -112,14 +113,54 @@ def _sweep_discount_anomalies(config: DealHealthConfig) -> set[int]:
             continue
         effective = _effective_discount(quotation)
         if effective > average * Decimal(config.anomaly_multiplier):
+            # Severity from the ratio, then floored by governance's own verdict.
+            # 1.5x the flag threshold, not a hardcoded 3x, so tuning
+            # anomaly_multiplier keeps the two cuts in proportion.
+            by_ratio = (
+                AlertSeverity.HIGH
+                if effective > average * Decimal(config.anomaly_multiplier) * Decimal("1.5")
+                else AlertSeverity.MEDIUM
+            )
             _upsert_alert(
                 quotation,
                 AlertType.DISCOUNT_ANOMALY,
-                AlertSeverity.HIGH if effective > average * 3 else AlertSeverity.MEDIUM,
+                _at_least(by_ratio, _risk_floor(quotation)),
                 f"Discount {effective:.0f}% vs avg {average:.0f}%",
             )
             flagged.add(quotation.id)
     return flagged
+
+
+#: Alert severity, weakest first — so two severities can be compared.
+_SEVERITY_ORDER = [AlertSeverity.LOW, AlertSeverity.MEDIUM, AlertSeverity.HIGH]
+
+#: A quotation's approval risk band, expressed as an alert severity.
+_BAND_AS_SEVERITY = {
+    RiskBand.HIGH: AlertSeverity.HIGH,
+    RiskBand.MEDIUM: AlertSeverity.MEDIUM,
+    RiskBand.NONE: AlertSeverity.LOW,
+}
+
+
+def _at_least(severity: str, floor: str) -> str:
+    return max(severity, floor, key=_SEVERITY_ORDER.index)
+
+
+def _risk_floor(quotation: Quotation) -> str:
+    """A discount anomaly can never be milder than the deal's own risk band.
+
+    Both numbers judge the same discount, so the dashboard cannot say MEDIUM
+    about a quote whose own header says HIGH — that is what Q-1041 did: 35% vs a
+    12% average is 2.9x, a hair under the HIGH cut, while governance scored it
+    100.00 and routed it to two approvers. The ratio and the score answer
+    different questions ("unusual for this rep" vs "how far past the ceiling"),
+    so neither should silently overrule the other; taking the stronger of the
+    two keeps the two screens telling one story.
+
+    Deliberately NOT applied to STALLED or DELIVERY_SLIPPAGE. Those measure time,
+    not discount, and a low-risk deal really can be badly stalled.
+    """
+    return _BAND_AS_SEVERITY.get(quotation.risk_band, AlertSeverity.LOW)
 
 
 def _sweep_delivery_slippage(config: DealHealthConfig) -> set[int]:

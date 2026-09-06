@@ -7,6 +7,7 @@ from ninja import Router, Schema
 
 from apps.accounts.auth import internal_auth, require_role
 from apps.common.enums import FulfillmentStatus, QuotationStatus, Role
+from apps.catalog.models import Product
 from apps.common.errors import NotFound
 from apps.fulfillment import services
 from apps.fulfillment.models import FulfillmentPlan, StockItem, Warehouse
@@ -130,6 +131,57 @@ class RestockIn(Schema):
     quantity: int
 
 
+class AddStockIn(Schema):
+    product_id: int
+    quantity: int = 0
+    reorder_point: int = 0
+    reorder_quantity: int = 0
+
+
+class AdjustStockIn(Schema):
+    """Every field optional — only what is sent is changed."""
+
+    quantity_on_hand: int | None = None
+    reorder_point: int | None = None
+    reorder_quantity: int | None = None
+
+
+class StockRowFullOut(StockRowOut):
+    """`StockRowOut` plus the columns the warehouse detail screen edits."""
+
+    product_sku: str
+    category_name: str
+    reorder_point: int
+    reorder_quantity: int
+
+    @staticmethod
+    def resolve_product_sku(obj) -> str:
+        return obj.product.sku
+
+    @staticmethod
+    def resolve_category_name(obj) -> str:
+        return obj.product.category.name
+
+
+class ProductWarehouseOut(Schema):
+    """Where one product is stocked, for the catalogue's Warehouse column."""
+
+    product_id: int
+    warehouse_id: int
+    warehouse_code: str
+    warehouse_name: str
+    quantity_on_hand: int
+    available: int
+
+    @staticmethod
+    def resolve_warehouse_code(obj) -> str:
+        return obj.warehouse.code
+
+    @staticmethod
+    def resolve_warehouse_name(obj) -> str:
+        return obj.warehouse.name
+
+
 @router.get("/warehouses", response=list[WarehouseOut])
 def list_warehouses(request):
     require_role(request, *VIEW_ROLES)
@@ -249,6 +301,71 @@ def consolidate_plan(request, plan_id: int):
     """
     require_role(request, Role.FINANCE)
     return services.consolidate_backorders(_get_plan(plan_id), actor=request.auth)
+
+
+@router.get("/warehouses/{warehouse_id}/stock", response=list[StockRowFullOut])
+def warehouse_stock(request, warehouse_id: int):
+    """Everything one warehouse stocks. Backs the warehouse detail screen."""
+    require_role(request, *VIEW_ROLES)
+    if not Warehouse.objects.filter(pk=warehouse_id).exists():
+        raise NotFound("Warehouse not found")
+    return list(
+        StockItem.objects.filter(warehouse_id=warehouse_id)
+        .select_related("warehouse", "product", "product__category")
+        .order_by("product__name")
+    )
+
+
+@router.get("/stock/by-product", response=list[ProductWarehouseOut])
+def stock_by_product(request):
+    """Flat (product, warehouse) pairs, so the catalogue can show where a
+    product actually sits without one request per row."""
+    require_role(request, *VIEW_ROLES)
+    return list(
+        StockItem.objects.select_related("warehouse")
+        .order_by("product_id", "warehouse__code")
+    )
+
+
+@router.post("/warehouses/{warehouse_id}/stock", response=StockRowFullOut)
+def add_warehouse_stock(request, warehouse_id: int, payload: AddStockIn):
+    """Start stocking a product at this warehouse."""
+    require_role(request, Role.FINANCE)
+    try:
+        warehouse = Warehouse.objects.get(pk=warehouse_id)
+    except Warehouse.DoesNotExist:
+        raise NotFound("Warehouse not found")
+    try:
+        product = Product.objects.select_related("category").get(pk=payload.product_id)
+    except Product.DoesNotExist:
+        raise NotFound("Product not found")
+    return services.add_stock_item(
+        warehouse=warehouse,
+        product=product,
+        quantity=payload.quantity,
+        reorder_point=payload.reorder_point,
+        reorder_quantity=payload.reorder_quantity,
+        actor=request.auth,
+    )
+
+
+@router.patch("/stock/{stock_item_id}", response=StockRowFullOut)
+def update_stock(request, stock_item_id: int, payload: AdjustStockIn):
+    """Correct a stock row. A change to on-hand is written to the ledger."""
+    require_role(request, Role.FINANCE)
+    try:
+        item = StockItem.objects.select_related(
+            "warehouse", "product", "product__category"
+        ).get(pk=stock_item_id)
+    except StockItem.DoesNotExist:
+        raise NotFound("Stock item not found")
+    return services.adjust_stock(
+        item,
+        quantity_on_hand=payload.quantity_on_hand,
+        reorder_point=payload.reorder_point,
+        reorder_quantity=payload.reorder_quantity,
+        actor=request.auth,
+    )
 
 
 @router.post("/stock/{stock_item_id}/restock", response=StockRowOut)

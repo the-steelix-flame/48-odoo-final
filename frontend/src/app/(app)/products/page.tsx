@@ -2,6 +2,7 @@
 
 /** Screen 16 — Product Catalog.  Owner: sinjeki. */
 
+import Link from "next/link";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 
@@ -51,6 +52,71 @@ const BLANK = {
   recurring_plan_id: "",
 };
 
+/**
+ * `/fulfillment/stock/by-product`. Local rather than in `types/index.ts`
+ * because that file is shared — keeping it here keeps this out of the team's
+ * merges.
+ */
+interface ProductWarehouse {
+  product_id: number;
+  warehouse_id: number;
+  warehouse_code: string;
+  warehouse_name: string;
+  quantity_on_hand: number;
+  available: number;
+}
+
+/**
+ * Which depots hold this product.
+ *
+ * "Not stocked" is a real and important state, not a blank: stock lives per
+ * (warehouse, product), so a product with no row anywhere can never be
+ * allocated by the splitter no matter how the catalogue reads.
+ */
+function WarehouseCell({
+  product,
+  held,
+  canSeeStock,
+}: {
+  product: Product;
+  held: ProductWarehouse[];
+  canSeeStock: boolean;
+}) {
+  if (product.is_subscription) {
+    return <span className="text-[#94A3B8]">—</span>;
+  }
+  if (!canSeeStock) {
+    return (
+      <span className="text-[11px] text-[#94A3B8]" title="Finance or Sales Manager only">
+        Restricted
+      </span>
+    );
+  }
+  if (held.length === 0) {
+    return (
+      <span className="text-[12px] text-[#D97706]" title="No warehouse holds this product">
+        Not stocked
+      </span>
+    );
+  }
+  return (
+    <span className="flex flex-wrap gap-x-[6px] gap-y-[2px]">
+      {held.map((row) => (
+        <Link
+          key={row.warehouse_id}
+          href={`/admin/warehouses/${row.warehouse_id}`}
+          onClick={(e: React.MouseEvent) => e.stopPropagation()}
+          className="font-mono text-[11px] text-[#0891B2] hover:underline"
+          title={`${row.warehouse_name}: ${row.available} available`}
+        >
+          {row.warehouse_code}
+          <span className="text-[#64748B]">·{row.available}</span>
+        </Link>
+      ))}
+    </span>
+  );
+}
+
 export default function ProductsPage() {
   const router = useRouter();
   const { role } = useAuth();
@@ -59,6 +125,15 @@ export default function ProductsPage() {
   // Active plans only. A retired plan must not be attachable to a new
   // product — that is how a dead billing policy comes back to life.
   const { data: plans } = useApi<RecurringPlanT[]>("/subscriptions/plans");
+  // Where each product actually sits. Stock is per (warehouse, product), so the
+  // catalogue's Stock column was a total with no way to see the split behind
+  // it. Fetched only for roles the server would answer — `/fulfillment/*` is
+  // Finance/Sales Manager/Admin, and a null path makes useApi skip the call
+  // rather than provoke a 403 the screen would have to swallow.
+  const canSeeStock = role === "FINANCE" || role === "SALES_MANAGER" || role === "ADMIN";
+  const { data: placements } = useApi<ProductWarehouse[]>(
+    canSeeStock ? "/fulfillment/stock/by-product" : null,
+  );
 
   const [creating, setCreating] = useState(false);
   const [form, setForm] = useState({ ...BLANK });
@@ -110,7 +185,15 @@ export default function ProductsPage() {
   if (error) return <ErrorState message={error.message} onRetry={reload} />;
 
   const list = products ?? [];
-  const variantTotal = list.reduce((sum, p) => sum + p.variant_count, 0);
+
+  // product id -> the warehouses holding it, cheapest-named first.
+  const byProduct = new Map<number, ProductWarehouse[]>();
+  for (const row of placements ?? []) {
+    const held = byProduct.get(row.product_id);
+    if (held) held.push(row);
+    else byProduct.set(row.product_id, [row]);
+  }
+  const warehouseCount = new Set((placements ?? []).map((r) => r.warehouse_id)).size;
 
   return (
     <>
@@ -261,7 +344,11 @@ export default function ProductsPage() {
           value={categories?.length ?? 0}
           hint="Each carries its own discount ceiling"
         />
-        <StatCard label="Variants" value={variantTotal} hint="SKUs across all products" />
+        <StatCard
+          label="Warehouses"
+          value={canSeeStock ? warehouseCount : "—"}
+          hint="Depots holding at least one product"
+        />
       </div>
 
       <Card title="Products">
@@ -272,7 +359,16 @@ export default function ProductsPage() {
           />
         ) : (
           <Table
-            columns={["Product name", "Category", "Variants", "Price", "Unit", "Tax", "Stock", "Status"]}
+            columns={[
+              "Product name",
+              "Category",
+              "Price",
+              "Unit",
+              "Tax",
+              "Stock",
+              "Warehouse",
+              "Status",
+            ]}
           >
             {list.map((product) => (
               <Row key={product.id} onClick={() => router.push(`/products/${product.id}`)}>
@@ -285,7 +381,6 @@ export default function ProductsPage() {
                   )}
                 </Cell>
                 <Cell>{product.category_name}</Cell>
-                <Cell>{product.variant_count || "—"}</Cell>
                 <Cell>
                   {money(product.base_price)}
                   {product.is_subscription && (
@@ -295,6 +390,13 @@ export default function ProductsPage() {
                 <Cell>{product.unit}</Cell>
                 <Cell>{percent(product.tax_percent, 0)}</Cell>
                 <Cell>{product.is_subscription ? "—" : product.quantity_on_hand}</Cell>
+                <Cell>
+                  <WarehouseCell
+                    product={product}
+                    held={byProduct.get(product.id) ?? []}
+                    canSeeStock={canSeeStock}
+                  />
+                </Cell>
                 <Cell>
                   <Badge tone={product.is_active ? "green" : "slate"}>
                     {product.is_active ? "Active" : "Archived"}
@@ -309,7 +411,10 @@ export default function ProductsPage() {
           <Note>
             Click a product row to open general info, variants and tier / currency price lists.
             Stock is derived from warehouse stock rows, never stored on the product — two sources
-            of truth is how a fulfillment demo desyncs.
+            of truth is how a fulfillment demo desyncs. The Warehouse column is that derivation
+            shown: each code links to the depot holding it, with what is available there. &ldquo;Not
+            stocked&rdquo; means no warehouse holds it at all, so the splitter can never allocate
+            it however the catalogue reads.
           </Note>
         </div>
       </Card>

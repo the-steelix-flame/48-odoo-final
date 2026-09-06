@@ -1586,6 +1586,156 @@ on both sides.
 
 ---
 
+### Q-1041 was HIGH risk and MEDIUM severity at the same time
+
+The quotation header read `RISK 100.00 · HIGH` and routed to two approvers. The
+Deal Health row for the same quotation read **Medium**. Both numbers judge the
+same discount, so one of them was lying.
+
+Anomaly severity came only from the ratio against the rep's trailing average,
+with a hardcoded `> 3x` cut. Q-1041 discounts 35% against a 12% average — 2.9x,
+a hair under the line — so it fell to MEDIUM. Q-1024 is 20% against 5% = 4x and
+got HIGH on a **lower** score of 75. The two scales were inverted against each
+other, which is worse than either being wrong: a manager triaging by severity
+would work the milder deal first.
+
+Two changes in `_sweep_discount_anomalies`:
+
+- The HIGH cut is now `anomaly_multiplier x 1.5` rather than a literal 3. At the
+  default multiplier of 2 that is still 3x, so nothing moves today — but tuning
+  the threshold in `DealHealthConfig` now moves both cuts together instead of
+  leaving the HIGH line stranded where it was.
+- A **floor**: the severity can never come out milder than the quotation's own
+  `risk_band` (`_risk_floor` / `_at_least`). The ratio still speaks for itself —
+  a wild discount from a rep with a NONE-band quote is still HIGH — but the
+  dashboard can no longer contradict the header.
+
+Deliberately **not** applied to STALLED or DELIVERY_SLIPPAGE. Those measure time,
+not discount; a low-risk deal really can be badly stalled, and flooring those
+against the risk band would invent severity rather than reconcile it.
+
+`apps/insights/tests.py` is new — that app had **zero** tests. Eight cover the
+ordering, the band mapping, an unscored quotation, and Q-1041 itself, including
+one that asserts the ratio alone *still* says MEDIUM, so the diagnosis stays
+pinned and not just the fix.
+
+Existing open alerts were re-swept: all three now agree with their headers.
+
+---
+
+### A demo-sized dataset, and two traps found while building it
+
+`seed_extra` grew from four steps to nine. Scale now: 25 users (6 reps, 2 managers, 2 finance),
+14 businesses across all three tiers, 59 products in 7 categories, 104 stock rows, 49 quotations,
+14 subscriptions, 33 invoices. **Fully idempotent** — the second run reports zero on every line,
+so it is safe to re-run whenever the database has drifted.
+
+Two things it had to fix rather than just add:
+
+**Five of six customer portals could not be opened.** `create_account` and `issue_portal_login`
+mint a random password and return it once — correct for a real onboarding, useless for a seed,
+because the string is never written down anywhere. The accounts existed and were unusable.
+`_demo_passwords` now resets every `.test` address to `dealflow`. Scoped to `.test` because
+RFC 2606 reserves it, so the step is a no-op on any real deployment rather than a way to reset
+somebody's account.
+
+**A new product category is invisible to risk scoring without a ceiling.** `quotations.services`
+resolves it as `ceilings.get(category_id, tier_ceiling)`, so a category with no
+`CategoryDiscountCeiling` silently inherits the tier's and every line in it looks compliant. It
+degrades quietly instead of failing, which is worse — the demo would show a discount sailing
+through with nothing on screen to explain why. All four new categories ship with one, and
+SOFTWARE is set at 8%: stricter than Gold, so the brief's "a Gold customer is still flagged"
+case now has a second category behind it instead of only Services.
+
+Everything is built through the ordinary services — `create_account`, `create_business`,
+`submit`, `confirm`, `raise_bill_for_quotation` — so the seeded rows obey the rules that rows
+typed by a user obey. Billing is deliberately left partial, in thirds: some deals confirmed and
+unbilled so Finance's Release bill button has something real to act on, some billed and OPEN,
+some part-paid so the amount-due column is not just a copy of the total.
+
+Verified after seeding: 183 tests pass; 29 endpoints across 5 roles return only 200 or a correct
+403; all 14 portals log in; no product has a negative margin, no category lacks a ceiling, no
+physical product lacks stock.
+
+### Names were invisible on two admin screens
+
+Business management and Warehouse management rendered the name column in `text-slate-100` — a
+leftover from the dark theme, and near-white on the white card that replaced it. The same
+leftover was in the generated-credentials panel on three screens (`bg-emerald-950/30` with
+`bg-black/30` insets, which over a white page renders as murky grey rather than as a panel), and
+in four other spots.
+
+All twelve are now on the light palette the rest of the app uses: `#0F172A` for a name cell,
+`#334155` for body text, and the `#ECFDF5` / `#A7F3D0` / `#065F46` success set already used by
+`BillPanel`. `grep` for `text-slate-100|text-slate-200` across `src/` now returns nothing.
+
+---
+
+### The catalogue and the warehouses were never joined
+
+Warehouse Management listed depots. The catalogue listed products. Nothing connected them, so
+there was no way to stock a new product, or to correct one that had run down, outside the Django
+admin. That gap is not cosmetic: stock lives per `(warehouse, product)`, so a product with **no
+row** at a warehouse is not "zero stock" there — it is invisible to the planner at that depot and
+can never be allocated from it. The catalogue could therefore grow to 59 products with most of
+them unshippable, and nothing on screen would say so.
+
+**New screen** — `/admin/warehouses/[id]`, reached by clicking a warehouse name or its stock
+count. Lists everything the depot holds (product, SKU, category, on hand, reserved, available,
+reorder point and quantity), edits any row in place, and has a picker to start stocking something
+new. The picker only offers products this depot does not already hold and never a subscription,
+so it cannot present a choice the server would reject.
+
+**New endpoints**, all in `fulfillment` (our lane — nothing in `catalog` or `accounts` was
+touched):
+
+| Route | Purpose |
+|---|---|
+| `GET /fulfillment/warehouses/{id}/stock` | everything one depot holds |
+| `POST /fulfillment/warehouses/{id}/stock` | start stocking a product |
+| `PATCH /fulfillment/stock/{id}` | correct on-hand / reorder fields |
+| `GET /fulfillment/stock/by-product` | flat pairs for the catalogue column |
+
+Two rules the services enforce, both worth keeping:
+
+- **A change to on-hand is a signed `ADJUST` move, never an overwrite.** `quantity_on_hand` must
+  stay equal to the sum of its own moves or the ledger cannot explain a level, and that level is
+  what every allocation was planned against. The opening quantity goes through `restock()` for the
+  same reason, which also means adding stock still fires the backorder-consolidation check.
+- **On-hand cannot be cut below `quantity_reserved`.** Those units are promised to accepted plans;
+  allowing it would make `available` negative and let the splitter commit the same stock twice.
+
+### Cost weight was a free-text box, and someone typed 1000 into it
+
+Removed Latitude, Longitude and **Cost weight** from the warehouse form, for two opposite reasons.
+
+The coordinates are genuinely unread — `planner.py` never looks at one — so the fields implied a
+behaviour that does not exist. Cost weight is the reverse: it is the planner's **primary sort
+key** (`sorted(warehouses, key=shipping_cost_weight)`) *and* the shipment-cost multiplier
+(`base_shipment_cost * shipping_cost_weight`). Far too load-bearing to be typed by hand — and it
+had been. Main Warehouse was carrying `1000.00`, which put it **last** in every split and priced
+its shipments at **$42,000**, while a brand-new empty depot sorted first and became the backorder
+fallback. Reset to `1.00`; new warehouses take the service default.
+
+The columns still exist and the splitter still uses the weight. Only the hand-editing is gone.
+
+### Product catalogue: Variants out, Warehouse in
+
+The Variants column read `—` on all 59 products (there are zero variants) while the question an
+operator actually has — *where is this?* — had no answer. Swapped it for a Warehouse column
+showing each depot code and what is available there, each one linking to that warehouse. **Not
+stocked** is rendered as its own amber state rather than a blank, because that is the case that
+silently breaks fulfilment. The "Variants" stat card became "Warehouses" for the same reason.
+
+The column is fetched only for roles the server would answer (`useApi` takes a `null` path for
+everyone else), so a Sales Rep sees "Restricted" rather than the screen swallowing a 403.
+
+Seven tests added in `apps/fulfillment/tests.py` covering the ledger identity, the duplicate-row
+refusal, subscriptions, the reserved floor, and that editing a reorder trigger writes no move.
+**190 pass.** No migration — nothing changed on a model.
+
+---
+
 ## 7. Migrations added by this lane
 
 Anyone pulling this must run `python manage.py migrate`:

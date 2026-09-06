@@ -96,7 +96,7 @@ export default function UserDetailPage({ params }: { params: Promise<{ id: strin
             </Badge>
             <Link
               href="/admin/users"
-              className="rounded-lg border border-edge px-4 py-2 text-sm text-slate-200 hover:bg-surface"
+              className="rounded-lg border border-edge px-4 py-2 text-sm text-[#334155] hover:bg-surface"
             >
               All users
             </Link>
@@ -111,17 +111,17 @@ export default function UserDetailPage({ params }: { params: Promise<{ id: strin
       )}
 
       {credentials && (
-        <div className="mb-6 rounded-xl border border-emerald-700 bg-emerald-950/30 p-5">
-          <h2 className="text-base font-semibold text-emerald-200">New credentials</h2>
-          <p className="mt-1 text-sm text-emerald-300/80">{credentials.notice}</p>
+        <div className="mb-6 rounded-xl border border-[#A7F3D0] bg-[#ECFDF5] p-5">
+          <h2 className="text-base font-semibold text-[#065F46]">New credentials</h2>
+          <p className="mt-1 text-sm text-[#047857]">{credentials.notice}</p>
           <div className="mt-4 grid gap-3 sm:grid-cols-2">
-            <div className="rounded-lg border border-emerald-800 bg-black/30 px-3 py-2">
-              <p className="text-xs uppercase tracking-wide text-emerald-400/70">Email</p>
-              <p className="mt-1 font-mono text-sm text-slate-100">{credentials.email}</p>
+            <div className="rounded-lg border border-[#A7F3D0] bg-white px-3 py-2">
+              <p className="text-xs uppercase tracking-wide text-[#047857]">Email</p>
+              <p className="mt-1 font-mono text-sm text-[#0F172A]">{credentials.email}</p>
             </div>
-            <div className="rounded-lg border border-emerald-800 bg-black/30 px-3 py-2">
-              <p className="text-xs uppercase tracking-wide text-emerald-400/70">Password</p>
-              <p className="mt-1 font-mono text-sm text-slate-100">{credentials.password}</p>
+            <div className="rounded-lg border border-[#A7F3D0] bg-white px-3 py-2">
+              <p className="text-xs uppercase tracking-wide text-[#047857]">Password</p>
+              <p className="mt-1 font-mono text-sm text-[#0F172A]">{credentials.password}</p>
             </div>
           </div>
           <div className="mt-4 flex flex-wrap gap-2">
@@ -168,7 +168,7 @@ export default function UserDetailPage({ params }: { params: Promise<{ id: strin
                   <p className="text-xs uppercase tracking-wide text-slate-500">
                     {metric.label}
                   </p>
-                  <p className="mt-1.5 text-xl font-semibold text-slate-100">{metric.value}</p>
+                  <p className="mt-1.5 text-xl font-semibold text-[#0F172A]">{metric.value}</p>
                   {metric.hint && (
                     <p className="mt-1 text-xs text-slate-500">{metric.hint}</p>
                   )}
@@ -252,7 +252,7 @@ export default function UserDetailPage({ params }: { params: Promise<{ id: strin
               ].map(([label, value]) => (
                 <div key={label} className="flex justify-between gap-3">
                   <dt className="text-slate-400">{label}</dt>
-                  <dd className="text-right text-slate-200">{value}</dd>
+                  <dd className="text-right text-[#334155]">{value}</dd>
                 </div>
               ))}
             </dl>

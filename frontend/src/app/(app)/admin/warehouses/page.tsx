@@ -8,11 +8,21 @@
  * the fulfillment splitter is allowed to consider, which makes defining one an
  * admin act rather than an operational one.
  *
- * Phase 1 of PLAN-distance-fulfillment.md. The coordinate fields are captured
- * here but nothing ranks by them yet: `planner.py` still sorts warehouses by
- * the static `shipping_cost_weight`, which is the same for every destination.
+ * Three fields were removed from this form (anubhaw0raj):
+ *
+ *   - Latitude / Longitude. Nothing reads them. `planner.py` never looks at a
+ *     coordinate, so typing one changed nothing and implied it did.
+ *   - Cost weight. The opposite problem: it is the planner's PRIMARY sort key
+ *     and it multiplies the shipment cost, so it is far too load-bearing to be
+ *     a free-text box. Someone typed 1000 into it, which sent Main Warehouse to
+ *     last place in every split and priced its shipments at $42,000. New depots
+ *     now take the service default of 1.0 and are ranked by real numbers.
+ *
+ * The columns still exist on the model and the splitter still uses the weight —
+ * this only stops it being edited by hand.
  */
 
+import Link from "next/link";
 import { useState } from "react";
 
 import { ApiError, patch, post } from "@/lib/api";
@@ -40,9 +50,6 @@ const BLANK = {
   name: "",
   code: "",
   address: "",
-  latitude: "",
-  longitude: "",
-  shipping_cost_weight: "1",
   base_shipment_cost: "30",
   lead_time_days: "3",
 };
@@ -79,9 +86,6 @@ export default function WarehouseManagementPage() {
       name: warehouse.name,
       code: warehouse.code,
       address: warehouse.address ?? "",
-      latitude: warehouse.latitude ?? "",
-      longitude: warehouse.longitude ?? "",
-      shipping_cost_weight: warehouse.shipping_cost_weight,
       base_shipment_cost: warehouse.base_shipment_cost,
       lead_time_days: String(warehouse.lead_time_days),
     });
@@ -109,15 +113,13 @@ export default function WarehouseManagementPage() {
 
   async function save(event: React.FormEvent) {
     event.preventDefault();
+    // Coordinates and cost weight are deliberately absent: the PATCH only
+    // touches keys it is sent, so omitting them leaves whatever the row already
+    // has rather than blanking it.
     const payload = {
       name: form.name,
       code: form.code,
       address: form.address,
-      // Empty means "no coordinate", not "parse this empty string". The server
-      // takes both or neither and refuses half a pair.
-      latitude: form.latitude.trim() || null,
-      longitude: form.longitude.trim() || null,
-      shipping_cost_weight: form.shipping_cost_weight,
       base_shipment_cost: form.base_shipment_cost,
       lead_time_days: Number(form.lead_time_days),
     };
@@ -182,48 +184,12 @@ export default function WarehouseManagementPage() {
                     required
                   />
                 </Field>
-                <Field
-                  label="Address"
-                  hint="Where the depot physically is. Used to measure the distance to a customer."
-                >
+                <Field label="Address" hint="Where the depot physically is.">
                   <input
                     className={inputClass}
                     value={form.address}
                     onChange={(e) => set("address", e.target.value)}
                     placeholder="12 Dock Road, Kolkata"
-                  />
-                </Field>
-                <Field
-                  label="Latitude"
-                  hint="Optional — filled automatically from the address later."
-                >
-                  <input
-                    className={inputClass}
-                    value={form.latitude}
-                    onChange={(e) => set("latitude", e.target.value)}
-                    placeholder="22.5726"
-                  />
-                </Field>
-                <Field label="Longitude" hint="Give both or neither.">
-                  <input
-                    className={inputClass}
-                    value={form.longitude}
-                    onChange={(e) => set("longitude", e.target.value)}
-                    placeholder="88.3639"
-                  />
-                </Field>
-                <Field
-                  label="Cost weight"
-                  hint="Multiplier the splitter ranks by today. Main 1.0, remote 1.4."
-                >
-                  <input
-                    type="number"
-                    step="0.1"
-                    min="0.1"
-                    className={inputClass}
-                    value={form.shipping_cost_weight}
-                    onChange={(e) => set("shipping_cost_weight", e.target.value)}
-                    required
                   />
                 </Field>
                 <Field label="Base shipment cost" hint="Charged once per shipment from here.">
@@ -261,9 +227,9 @@ export default function WarehouseManagementPage() {
 
             <div className="mt-4">
               <Note>
-                Coordinates are optional and nothing reads them yet — the splitter still ranks
-                warehouses by cost weight, which is identical for every customer. Capturing them now
-                is what lets distance-based allocation land without another migration.
+                Cost weight is set by the service, not typed here. It is the splitter&apos;s primary
+                sort key and it multiplies the shipment cost, so a hand-typed value silently changes
+                which depot every order ships from. New warehouses start at 1.0.
               </Note>
             </div>
           </Card>
@@ -282,7 +248,6 @@ export default function WarehouseManagementPage() {
             columns={[
               "Warehouse",
               "Address",
-              "Cost weight",
               "Shipment cost",
               "Lead time",
               "Stock",
@@ -292,34 +257,31 @@ export default function WarehouseManagementPage() {
           >
             {warehouses.map((warehouse) => (
               <Row key={warehouse.id}>
-                <Cell className="font-medium text-slate-100">
-                  {warehouse.name}
+                <Cell className="font-medium text-[#0F172A]">
+                  <Link
+                    href={`/admin/warehouses/${warehouse.id}`}
+                    className="hover:text-[#0891B2] hover:underline"
+                  >
+                    {warehouse.name}
+                  </Link>
                   <span className="ml-2 font-mono text-xs text-slate-500">{warehouse.code}</span>
                 </Cell>
-                <Cell className="max-w-[240px] text-slate-400">
+                <Cell className="max-w-[240px] text-[#64748B]">
                   {warehouse.address || <span className="text-slate-500">Not set</span>}
-                  {/* An address with no point is not yet a location — say so,
-                      rather than letting it look ready for the planner. */}
-                  {warehouse.address && !warehouse.has_coordinates && (
-                    <span className="mt-[2px] block text-[11px] text-[#D97706]">
-                      Not located yet
-                    </span>
-                  )}
-                  {warehouse.has_coordinates && (
-                    <span className="mt-[2px] block font-mono text-[11px] text-slate-500">
-                      {warehouse.latitude}, {warehouse.longitude}
-                    </span>
-                  )}
                 </Cell>
-                <Cell className="font-mono text-slate-400">{warehouse.shipping_cost_weight}</Cell>
-                <Cell className="text-slate-400">{money(warehouse.base_shipment_cost)}</Cell>
-                <Cell className="text-slate-400">{warehouse.lead_time_days}d</Cell>
-                <Cell className="text-slate-400">
-                  {warehouse.units_on_hand} units
-                  <span className="block text-[11px] text-slate-500">
-                    {warehouse.stock_line_count} product
-                    {warehouse.stock_line_count === 1 ? "" : "s"}
-                  </span>
+                <Cell className="text-[#64748B]">{money(warehouse.base_shipment_cost)}</Cell>
+                <Cell className="text-[#64748B]">{warehouse.lead_time_days}d</Cell>
+                <Cell className="text-[#64748B]">
+                  <Link
+                    href={`/admin/warehouses/${warehouse.id}`}
+                    className="hover:text-[#0891B2] hover:underline"
+                  >
+                    {warehouse.units_on_hand} units
+                    <span className="block text-[11px] text-slate-500">
+                      {warehouse.stock_line_count} product
+                      {warehouse.stock_line_count === 1 ? "" : "s"} &rarr;
+                    </span>
+                  </Link>
                 </Cell>
                 <Cell>
                   <Badge tone={warehouse.is_active ? "green" : "slate"}>

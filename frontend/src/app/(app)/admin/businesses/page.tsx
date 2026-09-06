@@ -129,22 +129,22 @@ export default function BusinessManagementPage() {
 
       {/* ---------------------------------------- credentials, shown once */}
       {credentials && (
-        <div className="mb-6 rounded-xl border border-emerald-700 bg-emerald-950/30 p-5">
-          <h2 className="text-base font-semibold text-emerald-200">
+        <div className="mb-6 rounded-xl border border-[#A7F3D0] bg-[#ECFDF5] p-5">
+          <h2 className="text-base font-semibold text-[#065F46]">
             Credentials for {credentials.business.name}
           </h2>
-          <p className="mt-1 text-sm text-emerald-300/80">{credentials.notice}</p>
+          <p className="mt-1 text-sm text-[#047857]">{credentials.notice}</p>
 
           <div className="mt-4 grid gap-3 sm:grid-cols-2">
-            <div className="rounded-lg border border-emerald-800 bg-black/30 px-3 py-2">
-              <p className="text-xs uppercase tracking-wide text-emerald-400/70">Login email</p>
-              <p className="mt-1 font-mono text-sm text-slate-100">
+            <div className="rounded-lg border border-[#A7F3D0] bg-white px-3 py-2">
+              <p className="text-xs uppercase tracking-wide text-[#047857]">Login email</p>
+              <p className="mt-1 font-mono text-sm text-[#0F172A]">
                 {credentials.portal_login_email}
               </p>
             </div>
-            <div className="rounded-lg border border-emerald-800 bg-black/30 px-3 py-2">
-              <p className="text-xs uppercase tracking-wide text-emerald-400/70">Password</p>
-              <p className="mt-1 font-mono text-sm text-slate-100">{credentials.password}</p>
+            <div className="rounded-lg border border-[#A7F3D0] bg-white px-3 py-2">
+              <p className="text-xs uppercase tracking-wide text-[#047857]">Password</p>
+              <p className="mt-1 font-mono text-sm text-[#0F172A]">{credentials.password}</p>
             </div>
           </div>
 
@@ -312,7 +312,7 @@ export default function BusinessManagementPage() {
           >
             {businesses.map((business) => (
               <Row key={business.id}>
-                <Cell className="font-medium text-slate-100">
+                <Cell className="font-medium text-[#0F172A]">
                   {business.name}
                   <span className="ml-2 text-xs text-slate-500">{business.currency}</span>
                 </Cell>
