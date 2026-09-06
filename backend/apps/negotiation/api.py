@@ -12,7 +12,8 @@ from decimal import Decimal
 
 from ninja import Router, Schema
 
-from apps.accounts.auth import any_auth, internal_auth
+from apps.accounts.auth import any_auth, internal_auth, require_role
+from apps.common.enums import NegotiationRequestStatus, QuotationStatus, Role
 from apps.common.errors import NotFound
 from apps.negotiation import services
 from apps.negotiation.models import NegotiationRequest
@@ -80,6 +81,51 @@ class PortalRequestOut(Schema):
         return obj.quotation.customer.name
 
 
+class PortalBillLineOut(Schema):
+    description: str
+    quantity: Decimal
+    unit_price: Decimal
+    line_total: Decimal
+
+
+class PortalBillOut(Schema):
+    """The bill, as the customer sees it. Null until Finance signs off."""
+
+    id: int
+    number: str
+    issue_date: date
+    due_date: date
+    currency: str
+    subtotal: Decimal
+    tax_total: Decimal
+    total: Decimal
+    amount_paid: Decimal
+    amount_due: Decimal
+    is_paid: bool
+    status: str
+    sales_rep: str
+    lines: list[PortalBillLineOut]
+
+
+class PortalBillHistoryOut(Schema):
+    """One line of the customer's own billing history on this order."""
+
+    id: int
+    number: str
+    issue_date: date
+    invoice_type: str
+    period_start: date | None = None
+    period_end: date | None = None
+    total: Decimal
+    amount_paid: Decimal
+    amount_due: Decimal
+    is_paid: bool
+
+
+class PayIn(Schema):
+    reference: str = ""
+
+
 class PortalQuotationRowOut(Schema):
     """One row of the customer's quotation list. Deliberately thin."""
 
@@ -114,6 +160,14 @@ class PortalQuotationOut(Schema):
     #: Computed here so the portal renders a number rather than deriving one.
     effective_discount_percent: Decimal
     company_name: str
+    #: Null until Finance or a Sales Manager accepts the final deal.
+    bill: PortalBillOut | None = None
+    #: Every invoice on this order. `bill` is the one they are dealing with
+    #: now; this is so a customer who has paid more than once can see all of
+    #: their own payments rather than just the most recent.
+    bill_history: list[PortalBillHistoryOut] = []
+    #: Only set once the bill is paid; despatch is not promised before then.
+    shipping_status: str | None = None
     lines: list[PortalLineOut]
     timeline: list[TimelineEntryOut]
     requests: list[PortalRequestOut]
@@ -202,7 +256,7 @@ def _effective_discount(quotation: Quotation) -> Decimal:
 
 
 def _portal_payload(quotation: Quotation) -> dict:
-    label, action_required = services.portal_status(quotation.status)
+    label, action_required = services.portal_status_for(quotation)
     open_request = services.open_request_for(quotation)
     # A counter waiting on the customer is also "your move", even if the
     # quotation status alone wouldn't say so. Keyed on COUNTERED rather than on
@@ -217,6 +271,44 @@ def _portal_payload(quotation: Quotation) -> dict:
         # answered it.
         action_required = True
         label = "Terms agreed — ready for your confirmation"
+
+    # The customer asked for a number and we simply said yes. To them that is a
+    # settled answer, not a negotiation still running, and the portal was
+    # describing it in negotiation language either way. Only where we accepted
+    # THEIR figure — a countered round is a different conversation, and one we
+    # already label above.
+    latest_request = quotation.negotiation_requests.order_by("-created_at").first()
+    plainly_accepted = (
+        open_request is None
+        and latest_request is not None
+        and latest_request.status == NegotiationRequestStatus.ACCEPTED
+        and latest_request.counter_discount_percent is None
+    )
+    # Not while it is still with our approvers: "accepted" would be true of the
+    # request and misleading about the deal.
+    if plainly_accepted and quotation.status in (
+        QuotationStatus.SENT,
+        QuotationStatus.APPROVED,
+        QuotationStatus.UNDER_NEGOTIATION,
+    ):
+        label = "Your request was accepted"
+        action_required = True
+    # What the customer is shown is what we last SENT them, not wherever the
+    # deal has since got to internally. A rep accepting a counter rewrites the
+    # order discount immediately — the approvers need the real number — but
+    # until someone presses "Send to customer" again, none of that is the
+    # customer's to see. Falls back to live figures for a quotation with no
+    # snapshot, which is any that predates this.
+    sent = services.sent_terms_for(quotation)
+    money = sent or {
+        "subtotal": quotation.subtotal,
+        "discount_total": quotation.discount_total,
+        "tax_total": quotation.tax_total,
+        "total": quotation.total,
+        "effective_discount_percent": _effective_discount(quotation),
+        "lines": list(quotation.lines.all()),
+    }
+
     return {
         "id": quotation.id,
         "number": quotation.number,
@@ -224,14 +316,17 @@ def _portal_payload(quotation: Quotation) -> dict:
         "status_label": label,
         "action_required": action_required,
         "currency": quotation.currency,
-        "subtotal": quotation.subtotal,
-        "discount_total": quotation.discount_total,
-        "tax_total": quotation.tax_total,
-        "total": quotation.total,
+        "subtotal": money["subtotal"],
+        "discount_total": money["discount_total"],
+        "tax_total": money["tax_total"],
+        "total": money["total"],
         "valid_until": quotation.valid_until,
-        "effective_discount_percent": _effective_discount(quotation),
+        "effective_discount_percent": money["effective_discount_percent"],
         "company_name": quotation.customer.name,
-        "lines": list(quotation.lines.all()),
+        "bill": services.portal_bill(quotation),
+        "bill_history": services.portal_bill_history(quotation),
+        "shipping_status": services.portal_shipping(quotation),
+        "lines": money["lines"],
         "timeline": services.negotiation_timeline(quotation),
         "requests": list(quotation.negotiation_requests.all()),
         "open_request": open_request,
@@ -268,7 +363,10 @@ def portal_list_quotations(request):
     """
     rows = []
     for quotation in services.portal_quotations_for(request.auth):
-        label, action_required = services.portal_status(quotation.status)
+        label, action_required = services.portal_status_for(quotation)
+        # Same rule as the detail view: the list shows what was sent, so a
+        # total cannot move here while an internal decision is still in flight.
+        sent = services.sent_terms_for(quotation)
         rows.append(
             {
                 "id": quotation.id,
@@ -277,10 +375,16 @@ def portal_list_quotations(request):
                 "status_label": label,
                 "action_required": action_required,
                 "currency": quotation.currency,
-                "total": quotation.total,
-                "line_count": quotation.lines.count(),
+                "total": sent["total"] if sent else quotation.total,
+                "line_count": (
+                    len(sent["lines"]) if sent else quotation.lines.count()
+                ),
                 "sent_at": getattr(quotation, "sent_at", None),
-                "effective_discount_percent": _effective_discount(quotation),
+                "effective_discount_percent": (
+                    sent["effective_discount_percent"]
+                    if sent
+                    else _effective_discount(quotation)
+                ),
             }
         )
     return rows
@@ -356,6 +460,15 @@ def portal_reject(request, quotation_id: int, payload: ResolveIn):
     return _portal_payload(quotation)
 
 
+@router.post("/quotations/{quotation_id}/pay", response=PortalQuotationOut, auth=any_auth)
+def portal_pay(request, quotation_id: int, payload: PayIn):
+    """Settle the bill in full."""
+    quotation = services.authorise_portal_access(request.auth, quotation_id)
+    services.pay_bill(quotation, actor=request.auth, reference=payload.reference)
+    quotation.refresh_from_db()
+    return _portal_payload(quotation)
+
+
 @router.post("/quotations/{quotation_id}/confirm", response=PortalQuotationOut, auth=any_auth)
 def portal_confirm(request, quotation_id: int):
     """Confirm Quotation.
@@ -372,6 +485,12 @@ def portal_confirm(request, quotation_id: int):
 # --------------------------------------------------------------------------
 # Internal routes — the rep's side of the same conversation
 # --------------------------------------------------------------------------
+#: Negotiating is the rep's job, and only the rep's. A Sales Manager or Finance
+#: user governs the deal — they approve or refuse the terms the rep brings them
+#: — and haggling directly with the customer would put them on both sides of
+#: their own approval. Reading the conversation stays open to every internal
+#: role, because an approver has to see what was said to judge it.
+MAY_NEGOTIATE = (Role.SALES_REP,)
 @router.post("/internal/quotations/{quotation_id}/send", auth=internal_auth)
 def send_to_customer(request, quotation_id: int):
     """Mint the portal link and move the quote to SENT."""
@@ -457,6 +576,7 @@ def counter_request(request, request_id: int, payload: CounterIn):
     Nothing is applied to the quotation yet — the discount only lands if the
     customer accepts, which keeps the quoted figures honest mid-haggle.
     """
+    require_role(request, *MAY_NEGOTIATE)
     negotiation_request = _get_request(request_id)
     services.counter_request(
         negotiation_request,
@@ -489,6 +609,7 @@ def accept_request(request, request_id: int):
     which answered 405. The accept had already succeeded by then, so the deal
     moved while the screen showed an error.
     """
+    require_role(request, *MAY_NEGOTIATE)
     negotiation_request = _get_request(request_id)
     quotation = services.accept_request(negotiation_request, actor=request.auth)
     return _negotiation_payload(quotation)

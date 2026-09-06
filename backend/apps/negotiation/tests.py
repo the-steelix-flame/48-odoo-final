@@ -12,17 +12,25 @@ from django.test import TestCase
 
 from apps.accounts import businesses
 from apps.accounts.models import User
+from apps.billing import services as billing
 from apps.catalog.models import Product, ProductCategory
+from apps.approvals import services as approval_services
 from apps.common.enums import (
+    ApprovalStatus,
     CustomerTier,
+    InvoiceType,
     NegotiationRequestStatus,
     QuotationStatus,
     Role,
 )
 from apps.common.errors import NotFound, PermissionDenied, ValidationError
 from apps.governance.models import CategoryDiscountCeiling, TierDiscountCeiling
+from apps.negotiation import api as negotiation_api
 from apps.negotiation import services as negotiation
+from apps.quotations import services as quotation_services
 from apps.quotations import services as quotations
+from apps.subscriptions import services as subscriptions
+from apps.subscriptions.models import RecurringPlan
 
 
 def _effective_discount(quotation) -> Decimal:
@@ -620,6 +628,568 @@ class CustomerRejectionTests(PortalTestBase):
         label, action_required = negotiation.portal_status(QuotationStatus.REJECTED)
         self.assertEqual(label, "Declined")
         self.assertFalse(action_required)
+
+
+class BillingFlowTests(PortalTestBase):
+    """Confirm → Finance accepts → bill → payment → invoice + despatch.
+
+    The order of those steps is the point. Billing used to happen inside
+    `confirm()`, which invoiced the customer for terms nobody internal had
+    signed off; the deal now waits for Finance or a Sales Manager.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.finance = User.objects.create_user(
+            email="finance@t.test", password="x", full_name="Fin", role=Role.FINANCE
+        )
+
+    def _confirmed(self):
+        quotation = self._quotation()
+        quotations.submit(quotation, actor=self.rep)
+        negotiation.send_to_customer(quotation, actor=self.rep)
+        negotiation.confirm_by_customer(quotation, actor=self.buyer)
+        quotation.refresh_from_db()
+        return quotation
+
+    def test_confirming_does_not_bill(self):
+        quotation = self._confirmed()
+
+        self.assertEqual(quotation.status, QuotationStatus.CONFIRMED)
+        self.assertIsNone(billing.bill_for(quotation))
+        state, invoice = billing.billing_state(quotation)
+        self.assertEqual(state, billing.BILLING_AWAITING)
+        self.assertIsNone(invoice)
+        # And the customer is told nothing is owed yet.
+        self.assertIsNone(negotiation.portal_bill(quotation))
+
+    def test_finance_signing_off_raises_the_bill(self):
+        quotation = self._confirmed()
+        invoice = billing.raise_bill_for_quotation(quotation, actor=self.finance)
+
+        self.assertEqual(invoice.invoice_type, InvoiceType.ONE_TIME)
+        state, _ = billing.billing_state(quotation)
+        self.assertEqual(state, billing.BILLING_PAYMENT_PENDING)
+
+    def test_the_bill_carries_the_rep_and_the_closing_amount(self):
+        """What a customer checks a bill against: who they agreed it with, and
+        for how much."""
+        quotation = self._confirmed()
+        billing.raise_bill_for_quotation(quotation, actor=self.finance)
+
+        bill = negotiation.portal_bill(quotation)
+        self.assertEqual(bill["sales_rep"], "Rep")
+        self.assertEqual(bill["total"], quotation.total)
+        self.assertEqual(bill["amount_due"], quotation.total)
+        self.assertFalse(bill["is_paid"])
+        self.assertEqual(len(bill["lines"]), 1)
+
+    def _negotiated(self, target="12"):
+        """A deal where both sides agreed a figure, so the discount lands on
+        `order_discount_percent` rather than on the lines."""
+        quotation = self._quotation()
+        quotations.submit(quotation, actor=self.rep)
+        negotiation.send_to_customer(quotation, actor=self.rep)
+        request = negotiation.submit_request(
+            quotation, actor=self.buyer, requested_discount_percent=Decimal(target)
+        )
+        negotiation.accept_request(request, actor=self.rep)
+        quotation.refresh_from_db()
+        negotiation.confirm_by_customer(quotation, actor=self.buyer)
+        quotation.refresh_from_db()
+        return quotation
+
+    def test_the_negotiated_discount_reaches_the_bill(self):
+        """`line_total` is net of the LINE discount only. The negotiated figure
+        lands on `order_discount_percent`, so billing the lines straight charged
+        the price from before the negotiation — a deal closed at 10% off was
+        invoiced at full list and the customer overpaid by exactly the discount
+        they had agreed."""
+        quotation = self._negotiated()
+        self.assertGreater(quotation.order_discount_percent, Decimal("0"))
+
+        invoice = billing.raise_bill_for_quotation(quotation, actor=self.finance)
+
+        self.assertEqual(invoice.total, quotation.total)
+
+    def test_a_bill_with_no_negotiation_is_unchanged(self):
+        """The factor is 1 when nothing was agreed, so an ordinary deal bills
+        exactly as it did before."""
+        quotation = self._confirmed()
+        self.assertEqual(quotation.order_discount_percent, Decimal("0.00"))
+
+        invoice = billing.raise_bill_for_quotation(quotation, actor=self.finance)
+
+        self.assertEqual(invoice.total, quotation.total)
+
+    def test_the_invoice_line_states_the_whole_discount_not_just_the_line_one(self):
+        """A customer reads this document. Carrying only the line-level figure
+        while the total reflected both would show a line whose own numbers did
+        not multiply out — 5% shown against a total that had 12% taken off.
+
+        The percentage is stored to two places, so re-multiplying it cannot
+        reproduce the cent exactly; the LINE TOTAL is the authority on what is
+        owed and the percentage describes it. Hence a cent of tolerance here
+        and an exact assertion on the money.
+        """
+        quotation = self._negotiated()
+        invoice = billing.raise_bill_for_quotation(quotation, actor=self.finance)
+
+        lines = list(invoice.lines.all())
+        self.assertTrue(lines)
+        for line in lines:
+            gross = Decimal(line.quantity) * Decimal(line.unit_price)
+            # The stated discount is the effective one, well above the 5% the
+            # line itself carries.
+            self.assertGreater(Decimal(line.discount_percent), Decimal("5"))
+            implied = (
+                gross * (Decimal("100") - Decimal(line.discount_percent)) / Decimal("100")
+            )
+            self.assertLess(abs(implied - Decimal(line.line_total)), Decimal("0.05"))
+
+        # The money itself is exact.
+        self.assertEqual(
+            sum(Decimal(line.line_total) for line in lines), invoice.subtotal
+        )
+
+    def test_a_deal_cannot_be_billed_before_it_is_confirmed(self):
+        quotation = self._quotation()
+        quotations.submit(quotation, actor=self.rep)
+        negotiation.send_to_customer(quotation, actor=self.rep)
+
+        with self.assertRaises(ValidationError):
+            billing.raise_bill_for_quotation(quotation, actor=self.finance)
+
+    def test_billing_twice_is_refused_and_names_the_existing_invoice(self):
+        """Two people accepting the same deal must not raise two bills."""
+        quotation = self._confirmed()
+        first = billing.raise_bill_for_quotation(quotation, actor=self.finance)
+
+        with self.assertRaises(ValidationError) as caught:
+            billing.raise_bill_for_quotation(quotation, actor=self.finance)
+        self.assertEqual(caught.exception.context.get("invoice_id"), first.id)
+
+    def test_despatch_is_not_promised_before_payment(self):
+        quotation = self._confirmed()
+        self.assertIsNone(negotiation.portal_shipping(quotation))
+        billing.raise_bill_for_quotation(quotation, actor=self.finance)
+        self.assertIsNone(negotiation.portal_shipping(quotation))
+
+    def test_paying_settles_the_bill_and_releases_despatch(self):
+        quotation = self._confirmed()
+        billing.raise_bill_for_quotation(quotation, actor=self.finance)
+
+        negotiation.pay_bill(quotation, actor=self.buyer, reference="Card ending 4242")
+
+        state, invoice = billing.billing_state(quotation)
+        self.assertEqual(state, billing.BILLING_PAID)
+        self.assertEqual(invoice.amount_due, Decimal("0.00"))
+        self.assertEqual(invoice.amount_paid, quotation.total)
+
+        bill = negotiation.portal_bill(quotation)
+        self.assertTrue(bill["is_paid"])
+        # The paid bill IS the invoice the customer keeps.
+        self.assertEqual(bill["number"], invoice.number)
+        self.assertIsNotNone(negotiation.portal_shipping(quotation))
+
+    def test_the_payment_records_its_reference(self):
+        quotation = self._confirmed()
+        billing.raise_bill_for_quotation(quotation, actor=self.finance)
+        negotiation.pay_bill(quotation, actor=self.buyer, reference="Card ending 4242")
+
+        payment = billing.bill_for(quotation).payments.get()
+        self.assertEqual(payment.reference, "Card ending 4242")
+        self.assertEqual(payment.method, "CARD")
+
+    def test_paying_twice_is_refused(self):
+        quotation = self._confirmed()
+        billing.raise_bill_for_quotation(quotation, actor=self.finance)
+        negotiation.pay_bill(quotation, actor=self.buyer)
+
+        with self.assertRaises(ValidationError):
+            negotiation.pay_bill(quotation, actor=self.buyer)
+
+    def test_the_portal_says_paid_once_the_bill_is_settled(self):
+        """Confirmed is about the terms; the customer wants to know whether
+        they still owe anything. A settled order read identically to one with
+        a bill sitting unpaid against it."""
+        quotation = self._confirmed()
+        self.assertEqual(negotiation.portal_status_for(quotation)[0], "Confirmed")
+
+        billing.raise_bill_for_quotation(quotation, actor=self.finance)
+        # Still "Confirmed" — a bill exists, but nothing has been paid yet.
+        self.assertEqual(negotiation.portal_status_for(quotation)[0], "Confirmed")
+
+        negotiation.pay_bill(quotation, actor=self.buyer)
+        self.assertEqual(negotiation.portal_status_for(quotation)[0], "Paid")
+
+    def test_paid_never_asks_the_customer_to_act(self):
+        quotation = self._confirmed()
+        billing.raise_bill_for_quotation(quotation, actor=self.finance)
+        negotiation.pay_bill(quotation, actor=self.buyer)
+
+        label, action_required = negotiation.portal_status_for(quotation)
+        self.assertEqual(label, "Paid")
+        self.assertFalse(action_required)
+
+    def test_only_confirmed_deals_can_read_as_paid(self):
+        """The override is keyed on CONFIRMED, so an earlier stage keeps its own
+        wording no matter what billing says."""
+        quotation = self._quotation()
+        quotations.submit(quotation, actor=self.rep)
+        negotiation.send_to_customer(quotation, actor=self.rep)
+
+        self.assertEqual(negotiation.portal_status_for(quotation)[0], "Awaiting your review")
+
+    def test_paying_with_no_bill_raised_is_refused(self):
+        """The portal hides the button, but the endpoint is reachable without it."""
+        quotation = self._confirmed()
+        with self.assertRaises(ValidationError):
+            negotiation.pay_bill(quotation, actor=self.buyer)
+
+
+class ApprovedTermsTests(PortalTestBase):
+    """A discount only reaches a customer after approval, so their yes is the
+    last one needed.
+
+    Approval used to be read off the STATUS, and `send_to_customer` moves an
+    approved quote APPROVED -> SENT — so the approval was thrown away the
+    instant the offer went out, and the customer accepting terms two approvers
+    had just cleared put the identical figures back in front of the same two.
+    """
+
+    def setUp(self):
+        super().setUp()
+        # An admin can act on any step, so one actor clears a two-stage chain.
+        self.approver = User.objects.create_user(
+            email="adm@terms.test", password="x", full_name="Adm", role=Role.ADMIN
+        )
+
+    def _approved_and_sent(self, discount="40"):
+        """A quote deep enough to need approval, approved, then sent."""
+        quotation = self._quotation(discount=discount)
+        quotations.submit(quotation, actor=self.rep)
+        quotation.refresh_from_db()
+        self.assertEqual(quotation.status, QuotationStatus.PENDING_APPROVAL)
+
+        # Clear every stage, however many the risk band asked for.
+        for _ in range(5):
+            quotation.refresh_from_db()
+            if quotation.status == QuotationStatus.APPROVED:
+                break
+            pending = quotation.approval_requests.filter(
+                status=ApprovalStatus.PENDING
+            ).first()
+            if pending is None:
+                break
+            approval_services.act(
+                pending, actor=self.approver, decision=ApprovalStatus.APPROVED, note="ok"
+            )
+        quotation.refresh_from_db()
+        self.assertEqual(quotation.status, QuotationStatus.APPROVED)
+        self.assertTrue(quotation.requires_approval, "still a high-discount deal")
+
+        negotiation.send_to_customer(quotation, actor=self.rep)
+        quotation.refresh_from_db()
+        self.assertEqual(quotation.status, QuotationStatus.SENT)
+        return quotation
+
+    def test_sending_an_approved_quote_does_not_lose_its_approval(self):
+        quotation = self._approved_and_sent()
+        self.assertTrue(quotation_services.terms_are_approved(quotation))
+
+    def test_accepting_already_approved_terms_goes_straight_to_fulfillment(self):
+        """The reported bug, end to end."""
+        quotation = self._approved_and_sent()
+
+        negotiation.confirm_by_customer(quotation, actor=self.buyer)
+
+        quotation.refresh_from_db()
+        self.assertEqual(quotation.status, QuotationStatus.CONFIRMED)
+        # And no second approval was raised for terms already signed off.
+        self.assertFalse(
+            quotation.approval_requests.filter(status=ApprovalStatus.PENDING).exists()
+        )
+
+    def test_renegotiating_after_approval_invalidates_it(self):
+        """The guard has to stay honest in the other direction: an approval must
+        never carry over onto numbers nobody approved.
+
+        A SENT quote cannot be hand-edited, so the way its terms move is the
+        customer countering and the rep accepting — which rewrites the order
+        discount and must therefore need approving again.
+        """
+        quotation = self._approved_and_sent()
+
+        request = negotiation.submit_request(
+            quotation, actor=self.buyer, requested_discount_percent=Decimal("55")
+        )
+        negotiation.accept_request(request, actor=self.rep)
+        quotation.refresh_from_db()
+
+        self.assertFalse(quotation_services.terms_are_approved(quotation))
+        self.assertEqual(quotation.status, QuotationStatus.PENDING_APPROVAL)
+
+    def test_the_fingerprint_ignores_a_recalculate_that_changes_nothing(self):
+        """`recalculate` rewrites `line_total` constantly. Hashing the totals
+        rather than the inputs would invalidate an approval for free."""
+        quotation = self._approved_and_sent()
+        before = quotation_services.terms_fingerprint(quotation)
+        quotation_services.recalculate(quotation)
+        self.assertEqual(quotation_services.terms_fingerprint(quotation), before)
+
+
+class SentTermsTests(PortalTestBase):
+    """What a customer sees changes when we send them something, and never
+    otherwise.
+
+    The portal read the LIVE quotation, so internal work leaked out of the
+    building: a rep accepting a counter rewrote the order discount and the
+    customer's screen changed to match, minutes before anyone pressed
+    "Send to customer".
+    """
+
+    def _sent(self):
+        quotation = self._quotation()
+        quotations.submit(quotation, actor=self.rep)
+        negotiation.send_to_customer(quotation, actor=self.rep)
+        quotation.refresh_from_db()
+        return quotation
+
+    def test_sending_records_what_the_customer_was_shown(self):
+        quotation = self._sent()
+        sent = negotiation.sent_terms_for(quotation)
+        self.assertIsNotNone(sent)
+        self.assertEqual(Decimal(sent["total"]), quotation.total)
+        self.assertEqual(len(sent["lines"]), 1)
+
+    def test_accepting_a_counter_does_not_move_the_customers_figures(self):
+        """The reported bug. Accepting is internal until it is re-sent."""
+        quotation = self._sent()
+        shown_before = negotiation.sent_terms_for(quotation)
+
+        request = negotiation.submit_request(
+            quotation, actor=self.buyer, requested_discount_percent=Decimal("12")
+        )
+        negotiation.accept_request(request, actor=self.rep)
+        quotation.refresh_from_db()
+
+        # The deal itself really has moved…
+        self.assertGreater(quotation.order_discount_percent, Decimal("0"))
+        # …but nothing the customer is looking at has.
+        self.assertEqual(negotiation.sent_terms_for(quotation), shown_before)
+
+    def test_re_sending_updates_what_the_customer_sees(self):
+        quotation = self._sent()
+        request = negotiation.submit_request(
+            quotation, actor=self.buyer, requested_discount_percent=Decimal("12")
+        )
+        negotiation.accept_request(request, actor=self.rep)
+        quotation.refresh_from_db()
+        if quotation.status != QuotationStatus.APPROVED:
+            quotations.transition(quotation, QuotationStatus.APPROVED, actor=self.rep)
+
+        negotiation.send_to_customer(quotation, actor=self.rep)
+        quotation.refresh_from_db()
+
+        sent = negotiation.sent_terms_for(quotation)
+        self.assertEqual(Decimal(sent["total"]), quotation.total)
+
+
+class RecurringBillingTests(PortalTestBase):
+    """Finance signs a subscription deal off once; every period after that
+    invoices itself and becomes payable with nobody touching it."""
+
+    def setUp(self):
+        super().setUp()
+        self.finance = User.objects.create_user(
+            email="fin@recur.test", password="x", full_name="Fin", role=Role.FINANCE
+        )
+        plan = RecurringPlan.objects.create(
+            name="Care Plan", interval="MONTHLY", bill_in_advance=True
+        )
+        self.service = Product.objects.create(
+            name="Care Plan 2yr", sku="SV-1", category=self.product.category,
+            base_price=Decimal("100"), cost_price=Decimal("40"), tax_percent=Decimal("0"),
+            is_subscription=True, recurring_plan=plan,
+        )
+
+    def _subscription_deal(self):
+        quotation = quotations.create_quotation(customer=self.customer, owner_rep=self.rep)
+        quotations.add_line(
+            quotation, product_id=self.service.id, quantity=Decimal("1"), actor=self.rep
+        )
+        quotations.submit(quotation, actor=self.rep)
+        negotiation.send_to_customer(quotation, actor=self.rep)
+        negotiation.confirm_by_customer(quotation, actor=self.buyer)
+        quotation.refresh_from_db()
+        return quotation
+
+    def test_a_subscription_only_deal_bills_without_erroring(self):
+        """This used to raise AFTER releasing the schedule, so Finance saw a red
+        error for a deal it had just billed correctly."""
+        quotation = self._subscription_deal()
+        invoice = billing.raise_bill_for_quotation(quotation, actor=self.finance)
+
+        self.assertEqual(invoice.invoice_type, InvoiceType.RECURRING)
+        state, _ = billing.billing_state(quotation)
+        self.assertEqual(state, billing.BILLING_PAYMENT_PENDING)
+
+    def test_the_customer_can_pay_a_subscription_period(self):
+        """Keying the portal on the one-time bill left a subscription customer
+        with a live service and nothing they could ever pay."""
+        quotation = self._subscription_deal()
+        billing.raise_bill_for_quotation(quotation, actor=self.finance)
+
+        bill = negotiation.portal_bill(quotation)
+        self.assertIsNotNone(bill)
+        self.assertFalse(bill["is_paid"])
+
+        negotiation.pay_bill(quotation, actor=self.buyer)
+        self.assertEqual(billing.billing_state(quotation)[0], billing.BILLING_PAID)
+
+    def test_the_next_period_becomes_payable_on_its_own(self):
+        """The whole point: no second sign-off from Finance."""
+        quotation = self._subscription_deal()
+        billing.raise_bill_for_quotation(quotation, actor=self.finance)
+        negotiation.pay_bill(quotation, actor=self.buyer)
+        self.assertIsNone(billing.payable_invoice_for(quotation))
+
+        subscription = quotation.subscriptions.get()
+        subscriptions.renew(subscription)
+
+        due = billing.payable_invoice_for(quotation)
+        self.assertIsNotNone(due, "the new period is payable with no Finance action")
+        self.assertEqual(due.invoice_type, InvoiceType.RECURRING)
+        self.assertFalse(negotiation.portal_bill(quotation)["is_paid"])
+
+    def test_a_hybrid_deal_shows_the_customer_every_invoice(self):
+        """INV-1048: a deal settled in two instalments looked like it had been
+        paid once, because each invoice carries only its own payments and
+        nothing pointed at the sibling."""
+        quotation = quotations.create_quotation(customer=self.customer, owner_rep=self.rep)
+        quotations.add_line(
+            quotation, product_id=self.product.id, quantity=Decimal("1"), actor=self.rep
+        )
+        quotations.add_line(
+            quotation, product_id=self.service.id, quantity=Decimal("1"), actor=self.rep
+        )
+        quotations.submit(quotation, actor=self.rep)
+        negotiation.send_to_customer(quotation, actor=self.rep)
+        negotiation.confirm_by_customer(quotation, actor=self.buyer)
+        quotation.refresh_from_db()
+        billing.raise_bill_for_quotation(quotation, actor=self.finance)
+
+        # One order, two invoices: the goods and the first period.
+        history = negotiation.portal_bill_history(quotation)
+        self.assertEqual(len(history), 2)
+        self.assertEqual(
+            {row["invoice_type"] for row in history},
+            {InvoiceType.ONE_TIME, InvoiceType.RECURRING},
+        )
+
+        # Paying twice settles them one at a time, and BOTH stay visible.
+        negotiation.pay_bill(quotation, actor=self.buyer)
+        negotiation.pay_bill(quotation, actor=self.buyer)
+
+        history = negotiation.portal_bill_history(quotation)
+        self.assertEqual(len(history), 2)
+        self.assertTrue(all(row["is_paid"] for row in history))
+        self.assertEqual(
+            sum(row["amount_paid"] for row in history), quotation.total
+        )
+
+    def test_billing_the_same_deal_twice_is_still_refused(self):
+        quotation = self._subscription_deal()
+        billing.raise_bill_for_quotation(quotation, actor=self.finance)
+        with self.assertRaises(ValidationError):
+            billing.raise_bill_for_quotation(quotation, actor=self.finance)
+
+
+class NegotiationRoleTests(PortalTestBase):
+    """Negotiating is the rep's job, and only the rep's.
+
+    A Sales Manager or Finance user governs the deal — they approve or refuse
+    the terms the rep brings them — so haggling directly with the customer
+    would put them on both sides of their own approval.
+    """
+
+    class _Request:
+        """The two attributes `require_role` actually reads."""
+
+        def __init__(self, user):
+            self.auth = user
+
+    def setUp(self):
+        super().setUp()
+        self.manager = User.objects.create_user(
+            email="mgr@role.test", password="x", full_name="Mgr", role=Role.SALES_MANAGER
+        )
+        self.finance = User.objects.create_user(
+            email="fin@role.test", password="x", full_name="Fin", role=Role.FINANCE
+        )
+        self.admin = User.objects.create_user(
+            email="adm@role.test", password="x", full_name="Adm", role=Role.ADMIN
+        )
+
+    def _open_request(self):
+        quotation = self._quotation()
+        quotations.submit(quotation, actor=self.rep)
+        negotiation.send_to_customer(quotation, actor=self.rep)
+        return negotiation.submit_request(
+            quotation, actor=self.buyer, requested_discount_percent=Decimal("12")
+        )
+
+    def test_a_sales_manager_cannot_accept_a_counter_offer(self):
+        request = self._open_request()
+        with self.assertRaises(PermissionDenied):
+            negotiation_api.accept_request(self._Request(self.manager), request.id)
+
+    def test_finance_cannot_accept_a_counter_offer(self):
+        request = self._open_request()
+        with self.assertRaises(PermissionDenied):
+            negotiation_api.accept_request(self._Request(self.finance), request.id)
+
+    def test_a_sales_manager_cannot_send_a_counter_offer(self):
+        request = self._open_request()
+        with self.assertRaises(PermissionDenied):
+            negotiation_api.counter_request(
+                self._Request(self.manager),
+                request.id,
+                negotiation_api.CounterIn(counter_discount_percent=Decimal("8"), note=""),
+            )
+
+    def test_finance_cannot_send_a_counter_offer(self):
+        request = self._open_request()
+        with self.assertRaises(PermissionDenied):
+            negotiation_api.counter_request(
+                self._Request(self.finance),
+                request.id,
+                negotiation_api.CounterIn(counter_discount_percent=Decimal("8"), note=""),
+            )
+
+    def test_the_rep_can_still_accept(self):
+        request = self._open_request()
+        negotiation_api.accept_request(self._Request(self.rep), request.id)
+        request.refresh_from_db()
+        self.assertEqual(request.status, NegotiationRequestStatus.ACCEPTED)
+
+    def test_an_admin_can_still_accept(self):
+        """`require_role` treats ADMIN as allowed everywhere, deliberately."""
+        request = self._open_request()
+        negotiation_api.accept_request(self._Request(self.admin), request.id)
+        request.refresh_from_db()
+        self.assertEqual(request.status, NegotiationRequestStatus.ACCEPTED)
+
+    def test_reading_the_conversation_stays_open_to_approvers(self):
+        """An approver has to see what was said in order to judge it — only
+        ACTING on it is the rep's."""
+        request = self._open_request()
+        payload = negotiation_api.get_negotiation(
+            self._Request(self.manager), request.quotation_id
+        )
+        self.assertEqual(payload["quotation_id"], request.quotation_id)
+        self.assertTrue(payload["timeline"])
 
 
 class PortalIsolationTests(PortalTestBase):

@@ -87,6 +87,21 @@ else:
         "default": {
             "ENGINE": "django.db.backends.sqlite3",
             "NAME": BASE_DIR / "dealflow.sqlite3",
+            "OPTIONS": {
+                # Signing in fires several API calls at once, and one of them
+                # (the dashboard) sweeps deal health, which WRITES. SQLite's
+                # default rollback journal gives a single writer an exclusive
+                # lock over the whole file, so a concurrent reader or writer
+                # got "database is locked" straight away and the dashboard
+                # answered 500 — intermittently, and only ever at login, which
+                # is exactly when the requests overlap.
+                #
+                # WAL lets readers carry on while a write is in flight, and the
+                # timeout makes a second writer wait its turn rather than fail.
+                # Both are per-connection pragmas, so they belong here.
+                "init_command": "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;",
+                "timeout": 20,
+            },
         }
     }
 

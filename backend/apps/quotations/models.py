@@ -50,6 +50,13 @@ class Quotation(TimeStampedModel):
     #: customer has already committed, so clearing approval confirms the order
     #: rather than sending it back for a second yes.
     customer_accepted_at = models.DateTimeField(null=True, blank=True)
+    #: Fingerprint of the terms an approver actually signed off — see
+    #: `quotations.services.terms_fingerprint`. Approval belongs to the NUMBERS,
+    #: not to the status: sending an approved quote moves it APPROVED -> SENT,
+    #: so testing the status alone threw the approval away the moment the offer
+    #: went out. Storing what was approved means a change to the money stops
+    #: matching on its own, with nothing to remember to invalidate.
+    approved_terms_hash = models.CharField(max_length=64, blank=True, default="")
 
     class Meta:
         db_table = "quotation"

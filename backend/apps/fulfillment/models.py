@@ -8,6 +8,13 @@ class Warehouse(TimeStampedModel):
     name = models.CharField(max_length=120, unique=True)
     code = models.CharField(max_length=20, unique=True)
     address = models.CharField(max_length=250, blank=True)
+    #: Resolved position of `address`. The splitter will rank warehouses by
+    #: distance from the customer once these are populated; until then it falls
+    #: back to `shipping_cost_weight`, which is the same for every destination.
+    latitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
+    longitude = models.DecimalField(max_digits=9, decimal_places=6, null=True, blank=True)
+    #: Null when a human typed the coordinates rather than geocoding them.
+    geocoded_at = models.DateTimeField(null=True, blank=True)
     #: Cost multiplier the splitter uses to break ties. Main = 1.0, remote = 1.4.
     shipping_cost_weight = models.DecimalField(max_digits=6, decimal_places=2, default=1)
     base_shipment_cost = models.DecimalField(**money(default=30))

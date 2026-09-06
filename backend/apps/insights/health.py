@@ -11,7 +11,7 @@ from __future__ import annotations
 from datetime import timedelta
 from decimal import Decimal
 
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.utils import timezone
 
 from apps.common.enums import (
@@ -177,20 +177,49 @@ def _refresh_rep_stats() -> dict[int, dict]:
     return stats
 
 
-def _upsert_alert(quotation, alert_type: str, severity: str, message: str) -> DealAlert:
-    """Update the open alert if there is one; never duplicate it."""
-    existing = DealAlert.objects.filter(
+def _open_alert(quotation, alert_type: str) -> DealAlert | None:
+    return DealAlert.objects.filter(
         quotation=quotation, alert_type=alert_type, status=AlertStatus.OPEN
     ).first()
+
+
+def _upsert_alert(quotation, alert_type: str, severity: str, message: str) -> DealAlert:
+    """Update the open alert if there is one; never duplicate it.
+
+    Check-then-create, which this was, is only idempotent when the calls are
+    serialised — and they are not. `run_sweep()` runs on every dashboard load,
+    and signing in fires several requests at once, so two sweeps would both see
+    no open alert and both insert. `unique_open_alert_per_quotation_type` then
+    refused the second, and the dashboard answered 500 for no reason the user
+    could see or reproduce on purpose.
+
+    The insert is its own savepoint because a failed statement aborts the
+    surrounding transaction on Postgres: without it, recovering from the
+    collision would leave the rest of the sweep unable to execute.
+    """
+    existing = _open_alert(quotation, alert_type)
     if existing:
         if existing.message != message or existing.severity != severity:
             existing.message = message
             existing.severity = severity
             existing.save(update_fields=["message", "severity", "updated_at"])
         return existing
-    return DealAlert.objects.create(
-        quotation=quotation, alert_type=alert_type, severity=severity, message=message
-    )
+
+    try:
+        with transaction.atomic():
+            return DealAlert.objects.create(
+                quotation=quotation,
+                alert_type=alert_type,
+                severity=severity,
+                message=message,
+            )
+    except IntegrityError:
+        # A concurrent sweep got there first. Its row is as good as ours —
+        # same quotation, same type, same run of the same rules.
+        raced = _open_alert(quotation, alert_type)
+        if raced is None:
+            raise
+        return raced
 
 
 @transaction.atomic

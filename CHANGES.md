@@ -775,6 +775,60 @@ the key — the endpoint, the `quotation_line_id` column on `NegotiationMessage`
 line-scoped rendering are all untouched, and a rep-side annotation UI could use them with no backend
 change.
 
+### Warehouse Management, and addresses on both ends of a shipment
+
+Phase 1 of [`PLAN-distance-fulfillment.md`](PLAN-distance-fulfillment.md). **No behaviour change** —
+this is the data and the admin surface that the distance-based splitter needs, landed on its own so
+the algorithm change can be reviewed as a small diff.
+
+The premise it starts from, corrected: `fulfillment/planner.py` is *not* a stub. It genuinely tries
+a single warehouse first, then greedy coverage, then backorder. What is fake is the number it ranks
+by — `Warehouse.shipping_cost_weight`, a static constant (`Main = 1.0`, `remote = 1.4`) that is
+identical whoever the goods are going to. So the suggestion is the same for a customer next door and
+one across the country, and replacing that one number is the whole feature.
+
+| File | Change |
+|---|---|
+| `common/geo.py` | **New.** `clean_point()` — the coordinate rule in one place, because two models carry a point and validating it twice would let the two drift. Dependency-free; `haversine_km` joins it in Phase 3. |
+| `accounts/models.py` | `Customer` gains `address`, `latitude`, `longitude`, `geocoded_at`. It had **no address field at all**. |
+| `fulfillment/models.py` | `Warehouse` gains `latitude`, `longitude`, `geocoded_at`. `address` already existed as unused free text. |
+| `accounts/warehouses.py` | **New.** `create_warehouse`, `update_warehouse`, `set_active`, validation. |
+| `accounts/admin_api.py` | `/admin/warehouses` CRUD + `/active`. Business schemas gain the address fields. |
+| `accounts/businesses.py` | `create_business` takes an address and a point. |
+| `app/(app)/admin/warehouses/page.tsx` | **New.** List, create, edit, retire/restore. |
+| `app/(app)/admin/businesses/page.tsx` | Delivery address on the form and in the table. |
+| `components/shell/Sidebar.tsx` | Warehouse management, Admin only. |
+
+**There was no way to create a warehouse.** `GET /fulfillment/warehouses` is read-only; warehouses
+came only from `seed_demo` or the Django admin. A warehouse decides what the splitter is even
+allowed to consider, which makes defining one an admin act — so this follows the `plans.py`
+precedent exactly: new file in `accounts`, no structural change to `fulfillment/`.
+
+**Coordinates are nullable on purpose.** Every existing customer and warehouse row has none, and
+allocation has to keep working for them — Phase 3's fallback to `shipping_cost_weight` is the
+feature's safety net, not an afterthought.
+
+Guards, each of which is a way to break allocation from the UI:
+
+| Guard | Why |
+|---|---|
+| Both coordinates or neither | A latitude alone reads as the prime meridian — a confidently wrong position, worse than no position. |
+| Range-checked (-90..90, -180..180) | An out-of-range value is not a near-miss; it is a swapped pair or metres. |
+| Cost weight must be > 0 | The splitter sorts on it and multiplies by it. Zero makes every warehouse look free and identical; a negative inverts the ranking. |
+| The last active warehouse cannot be retired | `plan_split` answers "No active warehouses configured" and backorders every line of every order. One click, all future allocation broken, nothing on screen saying why. |
+| Retiring never deletes | `StockItem` and `FulfillmentAllocation` both FK to the warehouse — deleting cascades away real inventory or orphans the record of where an order shipped from. |
+| Codes upper-cased, names and codes unique case-insensitively | The column is unique and case-sensitive, so `wh-1` and `WH-1` would both be accepted and read as one code. |
+
+Hand-typed coordinates clear `geocoded_at`, which is what will stop Phase 2's re-geocode from
+overwriting a correction someone made by hand.
+
+**On reusing `the-steelix-flame/aera`** — checked, and there is nothing to lift. It is a fork of an
+air-quality routing hackathon: one FastAPI file that calls open-meteo and asks Gemini whether
+there's a landfill nearby, plus a Leaflet frontend. No distance math and no geocoding module. What
+it does demonstrate is the two public endpoints worth using — Nominatim to geocode and OSRM to
+route — and those are recorded in the plan, with Nominatim's 1-request-per-second policy as the
+reason geocoding belongs at write time rather than in the allocation path.
+
 ---
 
 ## 2. What this is NOT (scope decision)
@@ -1049,6 +1103,489 @@ which is correct: there is nothing in-app behind you.
 
 ---
 
+### Billing: the deal is not billed until someone internal accepts it
+
+The negotiation workflow is untouched. What changed is what happens *after* it —
+previously nothing, or rather too much: `quotations.confirm()` issued the one-time
+invoice itself. Confirming is the **customer** agreeing to the terms; it is not us
+agreeing to them. Billing at that moment invoices a customer for a deal nobody on
+our side has signed off, and re-confirming during a negotiation would have raised
+paperwork repeatedly for terms still in flight.
+
+So the deal now stops at CONFIRMED and waits. Finance or a Sales Manager accepts
+it, and *that* raises the bill.
+
+**The lifecycle**, one deal, three states, named once in `billing/services.py` and
+rendered from that same source on both sides:
+
+| State | Finance sees | The customer sees |
+|---|---|---|
+| `AWAITING_BILL` | **Accept deal & generate bill** | "Your bill will appear here as soon as our team has finalised it" |
+| `PAYMENT_PENDING` | **Payment Pending** + the amount outstanding | "Your bill has been generated" → **Make the payment →** |
+| `PAID` | **View Invoice** | Despatch status, then the invoice itself |
+
+| File | Change |
+|---|---|
+| `apps/quotations/services.py` | `confirm()` no longer bills. It still plans fulfillment and creates the subscription records — the schedule should be visible — but passes `issue_invoices=False`. Returns `invoice_id: None` rather than dropping the key, so existing callers keep their shape. |
+| `apps/subscriptions/services.py` | `activate_from_quotation(..., issue_invoices=True)`. The opt-out defers a subscription's *first* period to the same sign-off as the one-time lines. Default unchanged, so every other caller behaves exactly as before. |
+| `apps/billing/services.py` | `bill_for()`, `billing_state()`, `raise_bill_for_quotation()`. |
+| `apps/billing/api.py` | `GET /billing/deals`, `POST /billing/quotations/{id}/bill` (FINANCE or SALES_MANAGER). |
+| `apps/negotiation/services.py` | `portal_bill()`, `portal_shipping()`, `pay_bill()`. |
+| `apps/negotiation/api.py` | `bill` and `shipping_status` on `PortalQuotationOut`; `POST /portal/quotations/{id}/pay`. |
+| `app/(app)/invoices/page.tsx` | The **Confirmed deals** worklist above the invoice list. |
+| `components/portal/BillPanel.tsx` | **New.** The customer's three states. |
+| `app/portal/quotations/[id]/pay/page.tsx` | **New.** Card checkout. |
+
+**Three decisions worth knowing.**
+
+`bill_for()` looks only at `ONE_TIME` invoices. A recurring invoice belongs to a
+subscription's own schedule and keeps arriving every period, so treating one as
+"the bill for the deal" would leave the deal permanently unpaid — the Finance row
+would never leave Payment Pending.
+
+Raising a bill twice is refused, and the refusal carries the existing `invoice_id`.
+Two people accepting the same deal at once is not hypothetical on a shared worklist,
+and two invoices for one order is a much more expensive mistake than a rejected
+second click.
+
+`portal_shipping()` returns `None` until the bill is paid. Promising despatch on an
+unpaid order is a claim we have not earned; once paid it names the warehouses the
+fulfillment plan actually allocated from.
+
+**Edge cases the frontend handles rather than discovers.** Checkout opened with no
+bill raised, or with one already settled, says which of the two it is instead of
+showing a form that would fail on submit. A part-settled bill asks for the balance,
+not the total again. Roles that cannot bill see "Awaiting Finance sign-off" rather
+than a button that 403s — the same "UI offers what the API refuses" pattern fixed
+earlier on settings, admin and the portal. And the confirmed-status line, which
+unconditionally read "Nothing further is needed from you", now defers to the bill
+above it when there is money outstanding; it was a direct contradiction.
+
+Verified: 10 new tests in `apps/negotiation/tests.py` (`BillingFlowTests`) walk
+confirm → sign-off → payment → invoice, and pin the refusals — billing before
+confirmation, billing twice, paying twice, paying with no bill raised. 127 backend
+tests pass. Every real row in the dev database was also serialised through the new
+schemas, which is where the pydantic-v2 coercion bugs have surfaced before: Q-1004
+sits in `PAYMENT_PENDING`, Q-1002 in `PAID` with despatch from Main Warehouse.
+
+No migration. It reuses the existing `Invoice`, `InvoiceLine` and `Payment` models.
+
+**Two follow-ups from using it.**
+
+*The checkout's Pay button failed silently.* It was disabled until every field
+validated, with no statement of what was outstanding. Entering `09/3` in the
+expiry — a two-digit month and one digit of year — left the button grey with
+nothing on screen explaining why, and once you had tabbed on to the security
+code there was no way to find out. The button is now always clickable and
+`whatsMissing()` names the incomplete fields on submit. A disabled control that
+won't say what it wants is a dead end.
+
+*A paid quotation still read "Confirmed" in the portal.* `portal_status` maps
+`QuotationStatus` alone, which never reaches "paid" — that is an invoice state,
+not a quotation one — so a settled order was indistinguishable from one with a
+bill sitting unpaid against it. New `portal_status_for(quotation)` overrides the
+label to **Paid** for a CONFIRMED deal whose bill is settled, and both the list
+and the detail payload now use it. Keyed on CONFIRMED, so earlier stages keep
+their own wording. 3 tests cover it.
+
+---
+
+### Shipping, so the lifecycle actually finishes
+
+Three things reported from the running app, all the same root cause.
+
+**Nothing ever shipped.** `shipped_at` was read in four places and written in
+none: no service set it, no endpoint existed, and `StockMoveReason.SHIP` was
+declared and unused. So the Shipped milestone was unreachable. Downstream of
+that, the invoice stepper showed Shipped grey forever, "Orders Awaiting
+Fulfillment" listed every confirmed order ever placed and could never empty,
+and the delivery-slippage sweep in `insights/health.py` compared `promised_date`
+against a timestamp nothing would ever set.
+
+**The stepper was in the wrong order.** It read Order Confirmed → Shipped →
+Invoiced → Paid, which says goods leave before anyone is billed. With the
+billing work above that is now plainly wrong, and it rendered as a grey step
+sandwiched between two green ones. It is now **Order Confirmed → Invoiced →
+Paid → Shipped**.
+
+| File | Change |
+|---|---|
+| `apps/fulfillment/services.py` | New `mark_shipped()` and `_consume_reservation()`. |
+| `apps/fulfillment/api.py` | `POST /fulfillment/plans/{id}/ship` (Finance/Admin); `billing_state` on `PlanOut`; `orders_awaiting` now excludes SHIPPED plans. |
+| `apps/billing/api.py` | `_lifecycle()` reordered. |
+| `apps/negotiation/services.py` | `portal_shipping()` says "has been despatched from" once it actually has, and mentions a backorder following separately. |
+| `app/(app)/fulfillment/[id]/page.tsx` | **Mark Shipped** action, per-allocation Shipped badge, green SHIPPED status. |
+
+**Shipping is gated on payment**, which is the rule the whole sequence rests on:
+`mark_shipped` refuses an unpaid order outright. Despatch is the one step that
+cannot be taken back, so it is a refusal rather than a warning. `PlanOut` carries
+`billing_state` purely so the screen can disable the button and say *why* instead
+of offering one the service will reject — the same pattern applied to the Finance
+worklist and the portal.
+
+**Reservations are consumed, not just released.** `_reserve` raises
+`quantity_reserved` and leaves `quantity_on_hand` alone, because a reservation is
+a promise rather than a movement. Shipping is the movement, so both drop together
+and a `SHIP` stock move records the delta. Clearing the reservation without
+deducting the stock would hand the same units to the next order.
+
+**A backorder holds the plan open.** A plan with unfilled backordered lines
+reaches `PARTIALLY_SHIPPED`, never `SHIPPED`, so it stays in the fulfillment
+queue — that leftover is exactly what the screen exists to surface — and the
+customer is told the rest follows separately.
+
+Verified: 9 new tests in `apps/fulfillment/tests.py` (`ShippingTests`, the first
+database-backed tests in that file) cover the refusals, the stock arithmetic, the
+queue emptying, the customer wording and the stepper order. 139 backend tests
+pass. Against the dev database, Q-1013/Q-1012/Q-1002 are paid and now offer
+**Mark Shipped**, while Q-1004 is payment-pending and correctly does not.
+
+No migration. `shipped_at`, `FulfillmentStatus.SHIPPED` and `StockMoveReason.SHIP`
+all already existed — they had simply never been wired to anything.
+
+---
+
+### The negotiated discount never reached the bill
+
+Found in the dev database, not in a test: **Q-1013** was agreed at 10% off. The
+quotation total said **$186.30**. The invoice said **$207.00**. The customer was
+charged the full list price and overpaid by exactly the discount both sides had
+shaken hands on.
+
+`issue_one_time_invoice` billed each line's `line_total`, which is net of that
+line's OWN discount and nothing else. A negotiated figure never lands on the
+lines — `accept_request` and `accept_counter` both write
+`order_discount_percent`, deliberately, so that agreeing 12% overall doesn't
+overwrite a line already sitting at 18%. So the one number the whole negotiation
+produces was the one number billing ignored.
+
+New `quotations.order_discount_factor(quotation)` is the single definition of
+"what is actually charged for this line". `recalculate` apportions the order
+discount by each line's share of the post-line-discount net, which reduces
+exactly to one multiplier:
+
+    order_discount_value × (line_total / net_after_lines)
+      = net_after_lines × order% / 100 × line_total / net_after_lines
+      = line_total × order% / 100
+
+so tax computed from it agrees with the tax on the quotation, by construction
+rather than by coincidence.
+
+| File | Change |
+|---|---|
+| `apps/quotations/services.py` | New `order_discount_factor()`. |
+| `apps/billing/services.py` | `issue_one_time_invoice` applies it, and states the **effective** discount per line. |
+| `apps/subscriptions/services.py` | `activate_from_quotation` applies it to the subscription's unit price. |
+
+**The subscription had the same hole.** It priced off `line_total / quantity`,
+so a negotiated discount was dropped from every recurring period, forever — a
+worse version of the same bug, because it recurs. It now inherits the agreed
+rate.
+
+**The invoice line states the effective discount**, not the line-level one.
+Showing 5% next to a total that had 12% taken off would put a line on a
+customer-facing document whose own numbers don't multiply out. The percentage is stored
+to two places, so re-multiplying it can't reproduce the cent exactly: the line
+total is the authority on what is owed and the percentage describes it. The test
+asserts the money exactly and the percentage to within a cent.
+
+Verified: Q-1013 now bills **$186.30**, matching its quotation exactly; Q-1012
+(no negotiation) is unchanged at $207.00; Q-1002 stays at $14,241.60 against a
+$14,526.60 quotation, which is correct — the $285 difference is a RECURRING line
+billing on its own subscription schedule, which is hybrid billing working, not a
+discrepancy. 3 new tests, 156 backend tests pass.
+
+⚠️ **The existing Q-1013 invoice in the dev database is still wrong** — it was
+raised before this fix and is already marked paid at $207.00. Left alone
+deliberately: correcting a settled invoice is a credit note, not an edit, and
+that is a call for whoever owns the demo data.
+
+---
+
+### Back on a screen the nav already lands on
+
+Reported on the portal quotation list: a Back control on the customer's home
+screen, offering to return them to a quotation they had deliberately navigated
+out of.
+
+`canGoBack` only asked "was there a previous screen inside this shell", which is
+true the moment you go anywhere and come back. But Back is meaningless on a nav
+destination — the nav gets you there in one click, and going "back" from a home
+screen leaves the place you just chose to be.
+
+`NAV_ROOTS` in `lib/navigation.tsx` lists every screen the sidebar or portal nav
+lands on, and `canGoBack` is false on those. Kept in one place rather than passed
+per page so it cannot drift: a new screen is either a nav destination and listed,
+or it is a detail view and gets Back. This also fixes `/portal/profile` and the
+fourteen internal nav screens, which all had it for the same reason — the report
+was about the portal, but the cause was not specific to it.
+
+---
+
+### Negotiating is the rep's job, and only the rep's
+
+A Sales Manager and a Finance user could both open the negotiation inbox and
+answer a customer's counter-offer directly. That puts an approver on both sides
+of their own approval: they haggle the terms, then sign off the terms they
+haggled. Their decision on a deal belongs in Approvals.
+
+| File | Change |
+|---|---|
+| `apps/negotiation/api.py` | `MAY_NEGOTIATE = (Role.SALES_REP,)`, enforced on `accept_request` and `counter_request`. ADMIN is implicit in `require_role`. |
+| `components/shell/Sidebar.tsx` | The Negotiations item is gated to Sales Rep and Admin. |
+| `app/(app)/negotiations/layout.tsx` | **New.** `RoleGuard`, because hiding a link is not access control — the URL still resolves if typed. |
+| `components/negotiation/RepNegotiationPanel.tsx` | Accept and counter are replaced, for other roles, by a line saying where their decision actually gets made. |
+
+Reading the thread stays open to every internal role, deliberately: an approver
+has to see what was said in order to judge it. Only acting on it is restricted.
+
+7 tests cover it, including that a rep and an admin can still accept, and that
+an approver can still read.
+
+---
+
+### The 28.6% on Q-1014, and two records that had drifted
+
+Reported from the portal: a deal negotiated at **17%** was showing the customer
+**28.6%**.
+
+This is the compounding bug anubhaw0raj fixed in `300bd46` (merged above):
+`accept_request` used to write the agreed figure straight onto
+`order_discount_percent`, which stacks on top of whatever the lines already
+carry. Q-1014 has a 14% line discount, so an agreed 17% came out at 28.62%.
+The current code derives the order-level percentage instead — for Q-1014 that
+is 3.49%, which produces exactly 17.00% overall.
+
+So the code was already right; **Q-1014 was a stale record written before the
+merge.** Two such records existed and both have been repaired in place:
+
+| Quote | Agreed | Was showing | Now | Status when repaired |
+|---|---|---|---|---|
+| Q-1014 | 17% | 28.62% | 17.00% | SENT |
+| Q-1011 | 8% | 14.44% | 8.00% | PENDING_APPROVAL |
+
+Neither was confirmed, invoiced or paid, so this is a correction rather than a
+credit note. **Q-1010 was checked and deliberately left alone**: it looks
+drifted against the customer's *asking* figure of 20%, but the rep countered 2%
+and the customer accepted that counter, so 2% is the agreed number and the
+record is correct.
+
+---
+
+### A revised offer now reads differently to each side
+
+The thread showed both parties the same sentence — "Quotation sent for your
+review" — for every send, including one that follows a whole negotiation. So
+neither side learned from the timeline that the terms had actually changed, and
+the rep's own screen described their revised offer in words written for the
+customer.
+
+`Thread.tsx` now derives this. A `SENT` entry preceded by any counter-offer,
+rep counter or acceptance is a **revised** offer, badged as such, and reads:
+
+- **Rep:** "Revised terms sent to the customer, following the internal review of this negotiation."
+- **Customer:** "Your account manager has come back with revised terms following your request. The updated figures are shown above."
+
+Derived at render rather than stored, for exactly the reason the author label
+already is: the event log records what happened, and each audience is told
+about it in its own words. The opening send is untouched.
+
+---
+
+### Accepting already-approved terms no longer reopens approval
+
+Reported on Q-1014, and the audit trail tells the whole story:
+
+```
+22:53  SUBMITTED  → approval #11: Sales Manager APPROVED, Finance APPROVED
+22:59  SENT_TO_CUSTOMER          ← the approved offer goes out
+23:15  SUBMITTED  → approval #12: the SAME two people, the SAME figures
+```
+
+The customer accepted exactly what two approvers had just cleared, and it went
+straight back into their queue. A discount only ever reaches a customer *after*
+approval, so the customer's yes is the last decision needed — the order should
+go to fulfillment.
+
+**Approval was being read off the status.** `confirm()` tested
+`status != APPROVED`, and `send_to_customer` moves an approved quote
+`APPROVED → SENT` — so the approval was discarded the instant the offer went
+out. The status records where the quote *is*, not what was *agreed to*.
+
+Approval now attaches to the terms. `terms_fingerprint()` hashes every input
+that moves the money — the order discount, and each line's quantity, unit price
+and discount — and `approved_terms_hash` stores it when an approval completes
+(including an auto-approval, which is still an approval, it just didn't need a
+human).
+
+Two properties make it safe:
+
+*It cannot go stale.* Any change to the money changes the hash by itself, so
+there is no invalidation step to remember and therefore none to forget. A
+renegotiation after approval still reopens it, which is tested.
+
+*It hashes inputs, not totals.* `recalculate()` rewrites `line_total`
+constantly with nothing having actually changed; fingerprinting the outputs
+would throw away an approval for free.
+
+The status check is **kept alongside** it, not replaced — `APPROVED →
+PENDING_APPROVAL` is not a legal transition, so on a quote sitting at APPROVED
+the old check was also preventing a crash rather than only a redundant
+approval. The full suite caught exactly that when the first attempt dropped it.
+
+| File | Change |
+|---|---|
+| `apps/quotations/models.py` | `approved_terms_hash` (migration `0005`). |
+| `apps/quotations/services.py` | `terms_fingerprint()`, `mark_terms_approved()`, `terms_are_approved()`; the confirm guard; auto-approval records it. |
+| `apps/approvals/services.py` | A completed approval records what it approved. |
+
+4 tests, including the reported flow end to end. 167 backend tests pass.
+
+⚠️ **Quotations approved before this migration have an empty hash**, so they
+need one more pass through approval to benefit; new deals work end to end.
+Q-1014 itself is legitimately back in approval — the discount correction in the
+previous commit changed its numbers, which is precisely the invalidation
+working.
+
+---
+
+### The intermittent 500 on the dashboard
+
+Two causes, both from the same design choice: `/insights/dashboard` calls
+`run_sweep()`, so **a GET performs writes** — and signing in fires several API
+calls at once, which is exactly when they collide.
+
+*SQLite locking.* The local database runs in the default rollback-journal mode,
+where a writer takes an exclusive lock on the whole file. A concurrent request
+got `database is locked` immediately. Now `journal_mode=WAL` with a 20s busy
+timeout: readers run alongside the writer, and a second writer waits its turn.
+Reproduced with 30 concurrent dashboard loads — 8 of 8 sweeps failed before,
+0 of 30 requests fail now.
+
+*A check-then-create race.* `_upsert_alert` looked for an open alert and then
+inserted, with no atomicity, against the partial unique constraint
+`unique_open_alert_per_quotation_type`. Two sweeps both found nothing and both
+inserted; the second was refused. The insert now takes its own savepoint — a
+failed statement aborts the surrounding transaction on Postgres, so recovering
+without one would strand the rest of the sweep — and falls back to the row the
+other sweep created. This is the cause that matters on Supabase, where the
+SQLite fix does nothing.
+
+The dashboard also no longer dies if the sweep fails: the counts are read from
+the table either way, so a lost race leaves them seconds stale. Answering 500
+because a background refresh collided is the one outcome that is certainly
+wrong.
+
+---
+
+### One logo, three surfaces
+
+The mark was hand-rolled twice, at different sizes, in the sidebar and the
+login panel — and the customer portal had no mark at all, just the words. The
+portal therefore looked like a different product from the one the rep was
+signed in to. `components/shell/Brand.tsx` now defines it once, in three sizes,
+and all three surfaces use it.
+
+---
+
+### A subscription deal could never be paid
+
+Two faults, one deal shape.
+
+**Finance saw a red error for a deal it had just billed.** For an order with no
+one-time lines, `raise_bill_for_quotation` released the recurring schedule and
+*then* raised `ValidationError` to explain itself. But it is `@transaction.
+atomic`, so raising rolled the release back — the message said "its recurring
+schedule has been released" while undoing exactly that. Q-1014 sat at
+AWAITING_BILL with zero invoices and a red banner. Releasing the schedule is
+the whole job for a subscription deal, so it now returns the first period's
+invoice instead of raising.
+
+**The customer had a live subscription and nothing they could pay.**
+`portal_bill` keyed on `bill_for`, which is ONE_TIME only — correct for "have
+the goods been paid for", useless as "what do I owe". Split in two:
+
+| Function | Answers |
+|---|---|
+| `bill_for` | The one-off goods bill. Still ONE_TIME; despatch turns on it. |
+| `payable_invoice_for` | The next invoice owed, of any type. Drives the portal. |
+
+`billing_state` now reads every invoice type, so a recurring deal returns to
+PAYMENT_PENDING each period — that is the schedule working, not the deal
+reopening. **Finance signs off once**; every period after that invoices itself
+via `renew()` and becomes payable with nobody touching it, which is what a
+schedule is for. `portal_shipping` was re-keyed onto `bill_for` so the despatch
+message doesn't vanish each time a period falls due.
+
+Verified on Q-1014 in a rolled-back transaction: it now bills as INV-1047
+(RECURRING, $3,818.00) and the customer immediately has something to pay.
+
+---
+
+### The customer's screen no longer moves while we are still deciding
+
+Reported on Q-1015, and its timestamps make it plain:
+
+```
+23:42:38  customer asks for 20%
+23:42:49  rep accepts        ← order discount rewritten, portal changes NOW
+23:46:13  SENT_TO_CUSTOMER   ← when the customer should actually have seen it
+```
+
+For three and a half minutes the customer was looking at terms nobody had sent
+them, produced by an internal decision that had not yet cleared approval.
+
+The portal read the live quotation. It now reads what was last **sent**:
+`PortalToken.terms_snapshot` (migration `negotiation/0008`) freezes the
+customer-facing figures at the moment a token is minted — which is the moment
+of sending, so the token is exactly the right place for it. Both the portal
+detail view and the list use it, falling back to live figures for quotations
+that predate the field.
+
+Decimals are stored as strings; JSON has no decimal type and rounding money
+through a float is not a trade worth making.
+
+**And an accepted request stops reading as a negotiation.** When we simply say
+yes to the customer's own figure, the portal now says *"Your request was
+accepted"* rather than describing an exchange that is over. Only where we
+accepted their number — a countered round is a different conversation, already
+labelled — and not while the deal is still with our approvers, where
+"accepted" would be true of the request and misleading about the deal.
+
+---
+
+### INV-1048: two payments, one of them apparently missing
+
+Nothing was lost, and no payment was misfiled. Q-1017 is a **hybrid** order, so
+it raised two invoices, and the two card payments went to the right one each:
+
+| Invoice | Type | Amount | Paid at |
+|---|---|---|---|
+| INV-1047 | ONE_TIME | $151.11 | 00:02:59, card ending 7654 |
+| INV-1048 | RECURRING | $33.58 | 00:03:14, card ending 5432 |
+
+A payment settles **one** invoice, so INV-1048's Payments table correctly
+listed one. Merging the other in would have been the wrong fix: a $151.11
+payment against a $33.58 invoice makes that document's own arithmetic
+nonsense. The real fault was that nothing anywhere pointed at the sibling, so
+two payments fifteen seconds apart read as one payment and one lost.
+
+**Finance side.** `InvoiceDetailOut` gained `related_invoices` plus
+`deal_total`, `deal_paid` and `deal_payment_count`. The Payments card now says
+"This invoice only — 2 payments totalling $184.69 received across Q-1017", and
+an **Other invoices on this deal** table links straight to the sibling.
+
+**Customer side had the same hole, and worse.** `portal_bill` shows the one
+invoice they are dealing with — what is due, or the latest receipt — so a
+customer who had paid $184.69 could see only the $33.58 half of it. New
+`bill_history` carries every invoice on the order, and the portal renders a
+**Your invoices** table whenever there is more than one.
+
+Verified against the real Q-1017: both invoices, both payments, $184.69 total,
+on both sides.
+
+---
+
 ## 7. Migrations added by this lane
 
 Anyone pulling this must run `python manage.py migrate`:
@@ -1059,6 +1596,8 @@ Anyone pulling this must run `python manage.py migrate`:
 | `negotiation/0004_alter_negotiationrequest_counter_discount_percent` | Makes it nullable — see bug 1 above. |
 | `negotiation/0005_negotiationevent` | The append-only negotiation log. |
 | `negotiation/0006_backfill_negotiation_events` | Reconstructs existing conversations into it. Data migration, reversible. |
+| `quotations/0005_quotation_approved_terms_hash` | Pins an approval to the terms it approved, so sending the quote doesn't discard it. |
+| `negotiation/0008_portaltoken_terms_snapshot` | Freezes the figures a customer was actually sent, so internal decisions stop leaking into the portal. |
 
 Business and user management deliberately needed **no** migration; they reuse `User.is_active`,
 `User.date_joined` and `Customer.portal_user`.

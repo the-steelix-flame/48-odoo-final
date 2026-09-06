@@ -7,9 +7,10 @@ from ninja import Router, Schema
 
 from apps.accounts.auth import internal_auth, require_role
 from apps.billing import services
-from apps.billing.models import Invoice
-from apps.common.enums import InvoiceStatus, Role
+from apps.billing.models import Invoice, Payment
+from apps.common.enums import InvoiceStatus, QuotationStatus, Role
 from apps.common.errors import NotFound
+from apps.quotations.models import Quotation
 
 router = Router(auth=internal_auth)
 
@@ -68,6 +69,19 @@ class PaymentOut(Schema):
         return (obj.recorded_by.full_name or obj.recorded_by.email) if obj.recorded_by_id else None
 
 
+class SiblingInvoiceOut(Schema):
+    """Another invoice raised against the same deal."""
+
+    id: int
+    number: str
+    invoice_type: str
+    status: str
+    issue_date: date
+    total: Decimal
+    amount_paid: Decimal
+    amount_due: Decimal
+
+
 class InvoiceDetailOut(InvoiceRowOut):
     quotation_id: int | None = None
     quotation_number: str | None = None
@@ -80,6 +94,20 @@ class InvoiceDetailOut(InvoiceRowOut):
     payments: list[PaymentOut]
     #: Drives the Order Confirmed → Shipped → Invoiced → Paid stepper.
     lifecycle: list[dict]
+    #: The OTHER invoices on this deal, oldest first.
+    #:
+    #: A hybrid order raises one invoice for the goods and one per subscription
+    #: period, and each carries only its own payments — correctly, because a
+    #: payment settles one invoice and listing another's here would make this
+    #: invoice's own arithmetic nonsense. But with nothing pointing at the
+    #: siblings, a deal paid in two instalments looked like it had been paid
+    #: once and the second payment looked lost.
+    related_invoices: list[SiblingInvoiceOut]
+    #: Totals across the whole deal, so the page can say what was actually
+    #: received against the order rather than only against this document.
+    deal_total: Decimal
+    deal_paid: Decimal
+    deal_payment_count: int
 
     @staticmethod
     def resolve_quotation_number(obj) -> str | None:
@@ -102,20 +130,99 @@ def _get(invoice_id: int) -> Invoice:
 
 
 def _lifecycle(invoice: Invoice) -> list[dict]:
-    """Reconciliation state: nothing is billed before it ships."""
+    """The order lifecycle, in the order it actually happens.
+
+    Confirmed -> invoiced -> paid -> shipped. Shipped used to sit second, which
+    read as though goods went out before anyone had been billed and left the
+    step permanently grey between two green ones — the customer pays first, and
+    despatch is what closes the deal out.
+    """
     quotation = invoice.quotation
     shipped = False
     if quotation:
         plan = quotation.fulfillment_plans.first()
+        # Every non-backordered line has left the warehouse. A plan with an
+        # open backorder is deliberately not "shipped" yet.
         shipped = bool(
-            plan and not plan.allocations.filter(shipped_at__isnull=True, is_backorder=False).exists()
+            plan
+            and not plan.allocations.filter(
+                shipped_at__isnull=True, is_backorder=False
+            ).exists()
         )
     return [
         {"label": "Order Confirmed", "done": quotation is not None},
-        {"label": "Shipped", "done": shipped},
         {"label": "Invoiced", "done": True},
         {"label": "Paid", "done": invoice.status == InvoiceStatus.PAID},
+        {"label": "Shipped", "done": shipped},
     ]
+
+
+class DealBillingRowOut(Schema):
+    """A confirmed deal and where it stands with billing.
+
+    Drives the Finance worklist: raise the bill, wait for payment, then open
+    the invoice. One row per deal so the three states read as one lifecycle
+    rather than three unrelated screens.
+    """
+
+    quotation_id: int
+    quotation_number: str
+    customer_name: str
+    #: Point 2 of the brief: whose deal this was.
+    sales_rep: str
+    #: The final closing amount agreed with the customer.
+    closing_amount: Decimal
+    currency: str
+    confirmed_at: datetime
+    billing_state: str  # AWAITING_BILL | PAYMENT_PENDING | PAID
+    invoice_id: int | None = None
+    invoice_number: str | None = None
+    invoice_total: Decimal | None = None
+    amount_due: Decimal | None = None
+
+
+@router.get("/deals", response=list[DealBillingRowOut])
+def list_deals_for_billing(request):
+    """Every confirmed deal, with its billing state."""
+    rows = []
+    quotations = (
+        Quotation.objects.filter(status=QuotationStatus.CONFIRMED)
+        .select_related("customer", "owner_rep")
+        .order_by("-last_activity_at")
+    )
+    for quotation in quotations:
+        state, invoice = services.billing_state(quotation)
+        rows.append(
+            {
+                "quotation_id": quotation.id,
+                "quotation_number": quotation.number,
+                "customer_name": quotation.customer.name,
+                "sales_rep": quotation.owner_rep.full_name or quotation.owner_rep.email,
+                "closing_amount": quotation.total,
+                "currency": quotation.currency,
+                "confirmed_at": quotation.last_activity_at,
+                "billing_state": state,
+                "invoice_id": invoice.id if invoice else None,
+                "invoice_number": invoice.number if invoice else None,
+                "invoice_total": invoice.total if invoice else None,
+                "amount_due": invoice.amount_due if invoice else None,
+            }
+        )
+    return rows
+
+
+@router.post("/quotations/{quotation_id}/bill", response=InvoiceDetailOut)
+def raise_bill(request, quotation_id: int):
+    """Accept the final deal and raise its bill."""
+    require_role(request, Role.FINANCE, Role.SALES_MANAGER)
+    try:
+        quotation = Quotation.objects.select_related("customer", "owner_rep").get(
+            pk=quotation_id
+        )
+    except Quotation.DoesNotExist:
+        raise NotFound("Quotation not found")
+    invoice = services.raise_bill_for_quotation(quotation, actor=request.auth)
+    return get_invoice(request, invoice.id)
 
 
 @router.get("/invoices", response=list[InvoiceRowOut])
@@ -158,8 +265,37 @@ def get_invoice(request, invoice_id: int):
         lines=list(invoice.lines.all()),
         payments=list(invoice.payments.select_related("recorded_by")),
         lifecycle=_lifecycle(invoice),
+        **_deal_context(invoice),
     )
     return data
+
+
+def _deal_context(invoice: Invoice) -> dict:
+    """The rest of the deal this invoice belongs to.
+
+    A hybrid order bills the goods once and the subscription every period, so
+    "what did this customer pay for this order" is a different question from
+    "what was paid against this document" — and only the second was answered
+    anywhere. Two payments fifteen seconds apart, on the two invoices of one
+    deal, read as one payment and one missing.
+    """
+    if invoice.quotation_id is None:
+        return {
+            "related_invoices": [],
+            "deal_total": invoice.total,
+            "deal_paid": invoice.amount_paid,
+            "deal_payment_count": invoice.payments.count(),
+        }
+
+    siblings = list(services.deal_invoices(invoice.quotation))
+    return {
+        "related_invoices": [i for i in siblings if i.id != invoice.id],
+        "deal_total": sum((i.total for i in siblings), Decimal("0")),
+        "deal_paid": sum((i.amount_paid for i in siblings), Decimal("0")),
+        "deal_payment_count": Payment.objects.filter(
+            invoice__in=[i.id for i in siblings]
+        ).count(),
+    }
 
 
 @router.post("/invoices/{invoice_id}/payments", response=InvoiceDetailOut)

@@ -2,12 +2,16 @@
 Owners: sinjeki (2, 15) · anubhaw0raj (14).
 """
 
+import logging
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 
+from django.db import DatabaseError
 from django.db.models import Avg, Count, Sum
 from django.utils import timezone
 from ninja import Router, Schema
+
+logger = logging.getLogger(__name__)
 
 from apps.accounts.auth import internal_auth
 from apps.billing.models import Invoice
@@ -141,7 +145,16 @@ class ReportOut(Schema):
 def dashboard(request):
     from apps.approvals.models import ApprovalRequest
 
-    run_sweep()  # keep the at-risk count honest on every load
+    # Keep the at-risk count honest on every load — but never at the cost of
+    # the dashboard itself. This is a WRITE on a GET, so it contends with the
+    # other calls the app fires on sign-in; the counts below are read straight
+    # from the table either way, so a sweep that loses a race just leaves them
+    # a few seconds stale. Answering 500 because a background refresh collided
+    # is the one outcome that is definitely wrong.
+    try:
+        run_sweep()
+    except DatabaseError as exc:
+        logger.warning("Deal-health sweep skipped on dashboard load: %s", exc)
 
     open_statuses = [
         QuotationStatus.DRAFT,

@@ -92,6 +92,11 @@ def act(
             return request
         _close(request, ApprovalStatus.APPROVED)
         quotation_services.transition(quotation, QuotationStatus.APPROVED, actor=actor)
+        # Pin what was approved to the numbers themselves, so the decision
+        # survives the quote being sent to the customer. Without this the
+        # customer accepting the very terms these approvers just cleared
+        # reopened approval for the same people.
+        quotation_services.mark_terms_approved(quotation)
         quotation_services.record_event(
             quotation, QuotationEventType.APPROVED, actor=actor, note=note, final=True
         )

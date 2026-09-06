@@ -118,6 +118,17 @@ export interface Business {
   tier: CustomerTier;
   currency: string;
   contact_email: string;
+
+  /**
+   * Where this business receives goods. `latitude`/`longitude` are null until
+   * the address is geocoded — see PLAN-distance-fulfillment.md. Nothing ranks
+   * warehouses by them yet; the fields exist so Phase 3 is a small diff.
+   */
+  address: string;
+  latitude?: string | null;
+  longitude?: string | null;
+  has_coordinates: boolean;
+
   owner_rep_id?: number | null;
   owner_rep_name?: string | null;
   default_price_list_id?: number | null;
@@ -141,6 +152,43 @@ export interface BusinessCredentials {
   portal_login_email: string;
   password: string;
   notice: string;
+}
+
+/**
+ * A stock location, as the admin back-end sees it. `/fulfillment/warehouses`
+ * returns only active ones for operational screens; this one includes retired
+ * warehouses, because an admin who cannot see one cannot restore it.
+ *
+ * Decimals arrive from the API as STRINGS. Parse them for display only.
+ */
+export interface Warehouse {
+  id: number;
+  name: string;
+  code: string;
+  address: string;
+  latitude?: string | null;
+  longitude?: string | null;
+  has_coordinates: boolean;
+  shipping_cost_weight: string;
+  base_shipment_cost: string;
+  lead_time_days: number;
+  is_active: boolean;
+  /** What retiring this warehouse would strand. */
+  stock_line_count: number;
+  units_on_hand: number;
+}
+
+/** The create form's payload. Every field the admin can set at creation. */
+export interface WarehouseInput {
+  name: string;
+  code: string;
+  address: string;
+  latitude: string | null;
+  longitude: string | null;
+  shipping_cost_weight: string;
+  base_shipment_cost: string;
+  lead_time_days: number;
+  is_active: boolean;
 }
 
 /** A user account as seen from the admin back-end. */
@@ -510,6 +558,9 @@ export interface FulfillmentPlan {
   is_manual_override: boolean;
   /** True once a restock makes an open backorder fillable. */
   consolidation_available: boolean;
+  /** Goods ship after the money arrives, so the screen needs this to explain
+   *  why it cannot ship yet instead of offering a button the API refuses. */
+  billing_state: BillingState;
   allocations: Allocation[];
 }
 
@@ -605,6 +656,26 @@ export interface InvoiceDetail extends InvoiceRow {
     recorded_by_name?: string | null;
   }[];
   lifecycle: { label: string; done: boolean }[];
+  /** The OTHER invoices on the same deal. A hybrid order bills the goods once
+   *  and the subscription every period, and each invoice carries only its own
+   *  payments — so without these a deal settled in two instalments looked like
+   *  it had been paid once. */
+  related_invoices: SiblingInvoice[];
+  /** Totals across the whole deal, not just this document. */
+  deal_total: string;
+  deal_paid: string;
+  deal_payment_count: number;
+}
+
+export interface SiblingInvoice {
+  id: number;
+  number: string;
+  invoice_type: InvoiceType;
+  status: InvoiceStatus;
+  issue_date: string;
+  total: string;
+  amount_paid: string;
+  amount_due: string;
 }
 
 // ---------------------------------------------------------------- insights
@@ -731,6 +802,67 @@ export interface NegotiationView {
   requests: PortalRequest[];
 }
 
+/** A line on the bill the customer receives. */
+export interface PortalBillLine {
+  description: string;
+  quantity: string;
+  unit_price: string;
+  line_total: string;
+}
+
+/** The bill. Null until Finance or a Sales Manager accepts the final deal. */
+export interface PortalBill {
+  id: number;
+  number: string;
+  issue_date: string;
+  due_date: string;
+  currency: string;
+  subtotal: string;
+  tax_total: string;
+  total: string;
+  amount_paid: string;
+  amount_due: string;
+  is_paid: boolean;
+  status: InvoiceStatus;
+  /** Who the customer agreed the deal with. */
+  sales_rep: string;
+  lines: PortalBillLine[];
+}
+
+/** One line of the customer's own billing history on an order. `bill` is the
+ *  invoice they are dealing with now; this is all of them, so a customer who
+ *  has paid more than once can see every payment they made. */
+export interface PortalBillHistoryEntry {
+  id: number;
+  number: string;
+  issue_date: string;
+  invoice_type: InvoiceType;
+  period_start?: string | null;
+  period_end?: string | null;
+  total: string;
+  amount_paid: string;
+  amount_due: string;
+  is_paid: boolean;
+}
+
+/** Where a confirmed deal stands with billing, on the Finance worklist. */
+export type BillingState = "AWAITING_BILL" | "PAYMENT_PENDING" | "PAID";
+
+export interface DealBillingRow {
+  quotation_id: number;
+  quotation_number: string;
+  customer_name: string;
+  sales_rep: string;
+  closing_amount: string;
+  currency: string;
+  confirmed_at: string;
+  billing_state: BillingState;
+  invoice_id?: number | null;
+  invoice_number?: string | null;
+  invoice_total?: string | null;
+  amount_due?: string | null;
+}
+
 /** The customer's own account. Read-only apart from the password. */
 export interface PortalProfile {
   login_email: string;
@@ -778,6 +910,12 @@ export interface PortalQuotation {
   /** What the rep has taken off, as a share of the pre-discount subtotal. */
   effective_discount_percent: string;
   company_name: string;
+  /** Null until Finance or a Sales Manager accepts the final deal. */
+  bill?: PortalBill | null;
+  /** Every invoice on this order, oldest first. */
+  bill_history?: PortalBillHistoryEntry[];
+  /** Only set once the bill is paid; despatch isn't promised before then. */
+  shipping_status?: string | null;
   lines: PortalLine[];
   timeline: TimelineEntry[];
   requests: PortalRequest[];

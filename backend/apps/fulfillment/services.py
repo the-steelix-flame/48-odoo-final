@@ -147,6 +147,97 @@ def override_plan(plan: FulfillmentPlan, allocations: list[dict], *, actor=None)
     return plan
 
 
+@transaction.atomic
+def mark_shipped(plan: FulfillmentPlan, *, actor=None) -> FulfillmentPlan:
+    """Despatch everything on this plan that is ready to go.
+
+    The last step of the order lifecycle: confirmed -> invoiced -> paid ->
+    shipped. Goods leave after the money arrives, so an unpaid order is
+    refused rather than warned about — it is the one step in that sequence we
+    cannot take back.
+
+    Nothing wrote `shipped_at` before this existed, which meant the "Shipped"
+    milestone could never be reached: the invoice stepper showed it grey
+    forever, orders never left the fulfillment queue, and the delivery-slippage
+    sweep compared `promised_date` against a timestamp nothing ever set.
+
+    Backorders stay behind. They ship when stock arrives and the plan is
+    consolidated, which is why a plan with one can only reach PARTIALLY_SHIPPED.
+    """
+    from apps.billing import services as billing
+
+    if plan.status == FulfillmentStatus.SHIPPED:
+        raise ValidationError("This order has already shipped")
+    if plan.status in (FulfillmentStatus.SUGGESTED, FulfillmentStatus.OVERRIDDEN):
+        raise ValidationError("Accept the split before shipping it")
+
+    state, _ = billing.billing_state(plan.quotation)
+    if state != billing.BILLING_PAID:
+        raise ValidationError(
+            f"{plan.quotation.number} has not been paid yet — goods ship once "
+            "the invoice is settled."
+        )
+
+    ready = list(
+        plan.allocations.filter(is_backorder=False, shipped_at__isnull=True).select_related(
+            "quotation_line", "warehouse"
+        )
+    )
+    if not ready:
+        raise ValidationError("Every line on this plan that can ship already has")
+
+    now = timezone.now()
+    for alloc in ready:
+        _consume_reservation(alloc, actor=actor)
+        alloc.shipped_at = now
+        alloc.save(update_fields=["shipped_at", "updated_at"])
+
+    # A plan holding an unfilled backorder is not finished, however much of the
+    # rest has gone out.
+    has_open_backorder = plan.allocations.filter(
+        is_backorder=True, shipped_at__isnull=True
+    ).exists()
+    plan.status = (
+        FulfillmentStatus.PARTIALLY_SHIPPED if has_open_backorder else FulfillmentStatus.SHIPPED
+    )
+    plan.save(update_fields=["status", "updated_at"])
+    return plan
+
+
+def _consume_reservation(alloc: FulfillmentAllocation, *, actor=None) -> None:
+    """Stock leaves the building: on-hand falls, and the reservation with it.
+
+    `_reserve` raised `quantity_reserved` without touching `quantity_on_hand`,
+    because a reservation is a promise, not a movement. Shipping is the
+    movement, so both drop together — releasing the reservation without
+    deducting the stock would hand the same units to the next order.
+    """
+    line = alloc.quotation_line
+    item = (
+        StockItem.objects.select_for_update()
+        .filter(
+            warehouse_id=alloc.warehouse_id,
+            product_id=line.product_id,
+            variant_id=line.variant_id,
+        )
+        .first()
+    )
+    if item is None:
+        return
+
+    item.quantity_on_hand = max(0, item.quantity_on_hand - alloc.quantity)
+    item.quantity_reserved = max(0, item.quantity_reserved - alloc.quantity)
+    item.save(update_fields=["quantity_on_hand", "quantity_reserved", "updated_at"])
+    StockMove.objects.create(
+        stock_item=item,
+        delta=-alloc.quantity,
+        reason=StockMoveReason.SHIP,
+        ref_type="fulfillment_allocation",
+        ref_id=alloc.id,
+        actor=actor,
+    )
+
+
 def _promise(alloc: FulfillmentAllocation) -> None:
     """Stamp the delivery promise from the warehouse's own lead time.
 

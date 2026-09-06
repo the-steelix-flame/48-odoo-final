@@ -26,6 +26,7 @@ from django.db import transaction
 from apps.accounts.models import Customer, User
 from apps.common.enums import CustomerTier, Role
 from apps.common.errors import ValidationError
+from apps.common.geo import clean_point
 
 #: Ambiguous glyphs removed — these passwords get read aloud, retyped off a
 #: screenshot, and pasted into chat. `l/1/I` and `O/0` cost support time.
@@ -56,6 +57,9 @@ def create_business(
     contact_email: str,
     tier: str = CustomerTier.BRONZE,
     currency: str = "USD",
+    address: str = "",
+    latitude=None,
+    longitude=None,
     owner_rep_id: int | None = None,
     default_price_list_id: int | None = None,
     create_portal_login: bool = True,
@@ -81,11 +85,18 @@ def create_business(
                 "or reset that account's password instead."
             )
 
+    # Validated before the login is minted, so a bad coordinate cannot leave a
+    # half-onboarded business with a portal user and no customer row.
+    lat, lng = clean_point(latitude, longitude)
+
     customer = Customer.objects.create(
         name=name,
         tier=tier,
         currency=currency,
         contact_email=contact_email,
+        address=(address or "").strip(),
+        latitude=lat,
+        longitude=lng,
         owner_rep_id=owner_rep_id,
         default_price_list_id=default_price_list_id,
     )

@@ -4,6 +4,7 @@
 
 import { use, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 
 import { ApiError, post } from "@/lib/api";
 import {
@@ -24,8 +25,18 @@ import { date, dateTime, money, percent, titleCase } from "@/lib/format";
 import { useApi } from "@/lib/useApi";
 import type { InvoiceDetail } from "@/types";
 
+/** Matches the invoice list, so a status reads the same on both screens. */
+const STATUS_TONE: Record<string, string> = {
+  DRAFT: "slate",
+  OPEN: "red",
+  PARTIALLY_PAID: "amber",
+  PAID: "green",
+  VOID: "slate",
+};
+
 export default function InvoiceDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
+  const router = useRouter();
   const [amount, setAmount] = useState("");
   const [method, setMethod] = useState("BANK_TRANSFER");
   const [reference, setReference] = useState("");
@@ -156,7 +167,20 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
             </dl>
           </Card>
 
-          <Card title="Payments">
+          <Card
+            title="Payments"
+            subtitle={
+              // A payment settles ONE invoice, so this table is only ever this
+              // document's — correct, but on a hybrid deal it reads as though
+              // the other instalment went missing. Say where the rest is.
+              data.related_invoices.length > 0
+                ? `This invoice only. ${data.deal_payment_count} payments totalling ${money(
+                    data.deal_paid,
+                    data.currency,
+                  )} have been received across ${data.quotation_number ?? "this deal"}.`
+                : undefined
+            }
+          >
             {data.payments.length === 0 ? (
               <p className="py-6 text-center text-sm text-slate-500">Nothing recorded yet.</p>
             ) : (
@@ -175,6 +199,47 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
               </Table>
             )}
           </Card>
+
+          {/* Where the other instalments live. One order bills the goods once
+              and the subscription every period, so a deal routinely has more
+              than one invoice — and nothing here pointed at the others. */}
+          {data.related_invoices.length > 0 && (
+            <Card
+              title="Other invoices on this deal"
+              subtitle={`${data.quotation_number ?? "This order"} · ${money(
+                data.deal_paid,
+                data.currency,
+              )} received of ${money(data.deal_total, data.currency)}`}
+            >
+              <Table columns={["Invoice #", "Type", "Issued", "Amount", "Paid", "Status"]}>
+                {data.related_invoices.map((sibling) => (
+                  <Row
+                    key={sibling.id}
+                    onClick={() => router.push(`/invoices/${sibling.id}`)}
+                  >
+                    <Cell className="font-heading font-medium text-[#0F172A]">
+                      {sibling.number}
+                    </Cell>
+                    <Cell>
+                      <Badge tone={sibling.invoice_type === "RECURRING" ? "blue" : "slate"}>
+                        {titleCase(sibling.invoice_type)}
+                      </Badge>
+                    </Cell>
+                    <Cell className="text-[#64748B]">{date(sibling.issue_date)}</Cell>
+                    <Cell>{money(sibling.total, data.currency)}</Cell>
+                    <Cell className="text-[#64748B]">
+                      {money(sibling.amount_paid, data.currency)}
+                    </Cell>
+                    <Cell>
+                      <Badge tone={STATUS_TONE[sibling.status]}>
+                        {titleCase(sibling.status)}
+                      </Badge>
+                    </Cell>
+                  </Row>
+                ))}
+              </Table>
+            </Card>
+          )}
         </div>
 
         <div className="space-y-6">

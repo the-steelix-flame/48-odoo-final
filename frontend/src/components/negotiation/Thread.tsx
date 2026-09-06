@@ -30,6 +30,9 @@ const KIND_META: Record<string, { label: string; tone: string }> = {
  *  renders as a plain entry instead of crashing the whole thread. */
 const UNKNOWN_KIND = { label: "", tone: "slate" };
 
+/** Moves that mean haggling has happened, so a later send is a REVISED offer. */
+const NEGOTIATION_KINDS = new Set(["COUNTER_REQUEST", "REP_COUNTER", "ACCEPTED"]);
+
 export function NegotiationThread({
   entries,
   viewpoint,
@@ -53,12 +56,38 @@ export function NegotiationThread({
     <ol className="space-y-3">
       {entries.map((entry, index) => {
         const mine = entry.author_type === viewpoint;
-        const meta = KIND_META[entry.kind] ?? UNKNOWN_KIND;
         const who = mine
           ? "You"
           : viewpoint === "CUSTOMER"
             ? "Your account manager"
             : entry.author_name;
+
+        /**
+         * A send that follows any haggling is a REVISED offer, not the opening
+         * one, and the two sides need to read it differently: internally it is
+         * the outcome of the approval conversation, and to the customer it is
+         * their account manager coming back to them. The stored body is one
+         * neutral sentence written for nobody in particular, so both sides saw
+         * the same "Quotation sent for your review" and neither learned that
+         * the terms had actually changed.
+         *
+         * Derived here rather than stored, for the same reason `who` is: the
+         * event log records what happened, and each audience is told about it
+         * in its own words.
+         */
+        const isRevisedOffer =
+          entry.kind === "SENT" &&
+          entries.slice(0, index).some((earlier) => NEGOTIATION_KINDS.has(earlier.kind));
+
+        const meta = isRevisedOffer
+          ? { label: "Revised offer sent", tone: "blue" }
+          : KIND_META[entry.kind] ?? UNKNOWN_KIND;
+
+        const body = isRevisedOffer
+          ? viewpoint === "REP"
+            ? "Revised terms sent to the customer, following the internal review of this negotiation."
+            : "Your account manager has come back with revised terms following your request. The updated figures are shown above."
+          : entry.body;
 
         return (
           <li
@@ -98,8 +127,8 @@ export function NegotiationThread({
               </p>
             )}
 
-            {entry.body && (
-              <p className="mt-2 whitespace-pre-wrap text-sm text-[#334155]">{entry.body}</p>
+            {body && (
+              <p className="mt-2 whitespace-pre-wrap text-sm text-[#334155]">{body}</p>
             )}
           </li>
         );
