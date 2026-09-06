@@ -198,7 +198,7 @@ export default function PortalQuotationPage({ params }: { params: Promise<{ id: 
             </Badge>
             <Link
               href="/portal"
-              className="rounded-lg border border-edge px-4 py-2 text-sm text-slate-200 hover:bg-surface"
+              className="rounded-lg border border-edge px-4 py-2 text-sm text-[#334155] hover:bg-surface"
             >
               All quotations
             </Link>
