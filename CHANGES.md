@@ -1586,6 +1586,43 @@ on both sides.
 
 ---
 
+### Q-1041 was HIGH risk and MEDIUM severity at the same time
+
+The quotation header read `RISK 100.00 · HIGH` and routed to two approvers. The
+Deal Health row for the same quotation read **Medium**. Both numbers judge the
+same discount, so one of them was lying.
+
+Anomaly severity came only from the ratio against the rep's trailing average,
+with a hardcoded `> 3x` cut. Q-1041 discounts 35% against a 12% average — 2.9x,
+a hair under the line — so it fell to MEDIUM. Q-1024 is 20% against 5% = 4x and
+got HIGH on a **lower** score of 75. The two scales were inverted against each
+other, which is worse than either being wrong: a manager triaging by severity
+would work the milder deal first.
+
+Two changes in `_sweep_discount_anomalies`:
+
+- The HIGH cut is now `anomaly_multiplier x 1.5` rather than a literal 3. At the
+  default multiplier of 2 that is still 3x, so nothing moves today — but tuning
+  the threshold in `DealHealthConfig` now moves both cuts together instead of
+  leaving the HIGH line stranded where it was.
+- A **floor**: the severity can never come out milder than the quotation's own
+  `risk_band` (`_risk_floor` / `_at_least`). The ratio still speaks for itself —
+  a wild discount from a rep with a NONE-band quote is still HIGH — but the
+  dashboard can no longer contradict the header.
+
+Deliberately **not** applied to STALLED or DELIVERY_SLIPPAGE. Those measure time,
+not discount; a low-risk deal really can be badly stalled, and flooring those
+against the risk band would invent severity rather than reconcile it.
+
+`apps/insights/tests.py` is new — that app had **zero** tests. Eight cover the
+ordering, the band mapping, an unscored quotation, and Q-1041 itself, including
+one that asserts the ratio alone *still* says MEDIUM, so the diagnosis stays
+pinned and not just the fix.
+
+Existing open alerts were re-swept: all three now agree with their headers.
+
+---
+
 ## 7. Migrations added by this lane
 
 Anyone pulling this must run `python manage.py migrate`:
