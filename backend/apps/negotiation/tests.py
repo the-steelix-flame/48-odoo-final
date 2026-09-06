@@ -1063,6 +1063,42 @@ class RecurringBillingTests(PortalTestBase):
         self.assertEqual(due.invoice_type, InvoiceType.RECURRING)
         self.assertFalse(negotiation.portal_bill(quotation)["is_paid"])
 
+    def test_a_hybrid_deal_shows_the_customer_every_invoice(self):
+        """INV-1048: a deal settled in two instalments looked like it had been
+        paid once, because each invoice carries only its own payments and
+        nothing pointed at the sibling."""
+        quotation = quotations.create_quotation(customer=self.customer, owner_rep=self.rep)
+        quotations.add_line(
+            quotation, product_id=self.product.id, quantity=Decimal("1"), actor=self.rep
+        )
+        quotations.add_line(
+            quotation, product_id=self.service.id, quantity=Decimal("1"), actor=self.rep
+        )
+        quotations.submit(quotation, actor=self.rep)
+        negotiation.send_to_customer(quotation, actor=self.rep)
+        negotiation.confirm_by_customer(quotation, actor=self.buyer)
+        quotation.refresh_from_db()
+        billing.raise_bill_for_quotation(quotation, actor=self.finance)
+
+        # One order, two invoices: the goods and the first period.
+        history = negotiation.portal_bill_history(quotation)
+        self.assertEqual(len(history), 2)
+        self.assertEqual(
+            {row["invoice_type"] for row in history},
+            {InvoiceType.ONE_TIME, InvoiceType.RECURRING},
+        )
+
+        # Paying twice settles them one at a time, and BOTH stay visible.
+        negotiation.pay_bill(quotation, actor=self.buyer)
+        negotiation.pay_bill(quotation, actor=self.buyer)
+
+        history = negotiation.portal_bill_history(quotation)
+        self.assertEqual(len(history), 2)
+        self.assertTrue(all(row["is_paid"] for row in history))
+        self.assertEqual(
+            sum(row["amount_paid"] for row in history), quotation.total
+        )
+
     def test_billing_the_same_deal_twice_is_still_refused(self):
         quotation = self._subscription_deal()
         billing.raise_bill_for_quotation(quotation, actor=self.finance)

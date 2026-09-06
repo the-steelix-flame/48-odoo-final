@@ -37,10 +37,65 @@ export function BillPanel({ quotation }: { quotation: PortalQuotation }) {
     );
   }
 
-  return bill.is_paid ? (
-    <PaidBill quotation={quotation} />
-  ) : (
-    <OutstandingBill quotation={quotation} />
+  return (
+    <>
+      {bill.is_paid ? (
+        <PaidBill quotation={quotation} />
+      ) : (
+        <OutstandingBill quotation={quotation} />
+      )}
+      <BillHistory quotation={quotation} />
+    </>
+  );
+}
+
+/**
+ * Every invoice on this order.
+ *
+ * The panel above shows the ONE the customer is dealing with — what is due, or
+ * their latest receipt. On an order that bills the goods once and a
+ * subscription every period that hid the rest, so someone who had paid twice
+ * could only ever see one of their own payments. Only rendered when there is
+ * genuinely more than one.
+ */
+function BillHistory({ quotation }: { quotation: PortalQuotation }) {
+  const history = quotation.bill_history ?? [];
+  if (history.length < 2) return null;
+
+  const currency = quotation.bill?.currency ?? quotation.currency;
+  const paid = history.reduce((sum, row) => sum + Number(row.amount_paid), 0);
+
+  return (
+    <Card
+      title="Your invoices"
+      subtitle={`${history.length} invoices on this order · ${money(
+        paid,
+        currency,
+      )} paid to date`}
+      className="mb-6"
+    >
+      <Table columns={["Invoice", "Issued", "Covers", "Amount", "Status"]}>
+        {history.map((row) => (
+          <Row key={row.id}>
+            <Cell className="font-medium text-[#0F172A]">{row.number}</Cell>
+            <Cell className="text-[#64748B]">{date(row.issue_date)}</Cell>
+            <Cell className="text-[#64748B]">
+              {row.period_start && row.period_end
+                ? `${date(row.period_start)} → ${date(row.period_end)}`
+                : "One-off"}
+            </Cell>
+            <Cell>{money(row.total, currency)}</Cell>
+            <Cell>
+              {row.is_paid ? (
+                <Badge tone="green">Paid</Badge>
+              ) : (
+                <Badge tone="amber">{money(row.amount_due, currency)} due</Badge>
+              )}
+            </Cell>
+          </Row>
+        ))}
+      </Table>
+    </Card>
   );
 }
 

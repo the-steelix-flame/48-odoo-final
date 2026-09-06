@@ -656,6 +656,26 @@ export interface InvoiceDetail extends InvoiceRow {
     recorded_by_name?: string | null;
   }[];
   lifecycle: { label: string; done: boolean }[];
+  /** The OTHER invoices on the same deal. A hybrid order bills the goods once
+   *  and the subscription every period, and each invoice carries only its own
+   *  payments — so without these a deal settled in two instalments looked like
+   *  it had been paid once. */
+  related_invoices: SiblingInvoice[];
+  /** Totals across the whole deal, not just this document. */
+  deal_total: string;
+  deal_paid: string;
+  deal_payment_count: number;
+}
+
+export interface SiblingInvoice {
+  id: number;
+  number: string;
+  invoice_type: InvoiceType;
+  status: InvoiceStatus;
+  issue_date: string;
+  total: string;
+  amount_paid: string;
+  amount_due: string;
 }
 
 // ---------------------------------------------------------------- insights
@@ -809,6 +829,22 @@ export interface PortalBill {
   lines: PortalBillLine[];
 }
 
+/** One line of the customer's own billing history on an order. `bill` is the
+ *  invoice they are dealing with now; this is all of them, so a customer who
+ *  has paid more than once can see every payment they made. */
+export interface PortalBillHistoryEntry {
+  id: number;
+  number: string;
+  issue_date: string;
+  invoice_type: InvoiceType;
+  period_start?: string | null;
+  period_end?: string | null;
+  total: string;
+  amount_paid: string;
+  amount_due: string;
+  is_paid: boolean;
+}
+
 /** Where a confirmed deal stands with billing, on the Finance worklist. */
 export type BillingState = "AWAITING_BILL" | "PAYMENT_PENDING" | "PAID";
 
@@ -876,6 +912,8 @@ export interface PortalQuotation {
   company_name: string;
   /** Null until Finance or a Sales Manager accepts the final deal. */
   bill?: PortalBill | null;
+  /** Every invoice on this order, oldest first. */
+  bill_history?: PortalBillHistoryEntry[];
   /** Only set once the bill is paid; despatch isn't promised before then. */
   shipping_status?: string | null;
   lines: PortalLine[];

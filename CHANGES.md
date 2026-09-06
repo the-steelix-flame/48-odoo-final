@@ -1554,6 +1554,38 @@ labelled — and not while the deal is still with our approvers, where
 
 ---
 
+### INV-1048: two payments, one of them apparently missing
+
+Nothing was lost, and no payment was misfiled. Q-1017 is a **hybrid** order, so
+it raised two invoices, and the two card payments went to the right one each:
+
+| Invoice | Type | Amount | Paid at |
+|---|---|---|---|
+| INV-1047 | ONE_TIME | $151.11 | 00:02:59, card ending 7654 |
+| INV-1048 | RECURRING | $33.58 | 00:03:14, card ending 5432 |
+
+A payment settles **one** invoice, so INV-1048's Payments table correctly
+listed one. Merging the other in would have been the wrong fix: a $151.11
+payment against a $33.58 invoice makes that document's own arithmetic
+nonsense. The real fault was that nothing anywhere pointed at the sibling, so
+two payments fifteen seconds apart read as one payment and one lost.
+
+**Finance side.** `InvoiceDetailOut` gained `related_invoices` plus
+`deal_total`, `deal_paid` and `deal_payment_count`. The Payments card now says
+"This invoice only — 2 payments totalling $184.69 received across Q-1017", and
+an **Other invoices on this deal** table links straight to the sibling.
+
+**Customer side had the same hole, and worse.** `portal_bill` shows the one
+invoice they are dealing with — what is due, or the latest receipt — so a
+customer who had paid $184.69 could see only the $33.58 half of it. New
+`bill_history` carries every invoice on the order, and the portal renders a
+**Your invoices** table whenever there is more than one.
+
+Verified against the real Q-1017: both invoices, both payments, $184.69 total,
+on both sides.
+
+---
+
 ## 7. Migrations added by this lane
 
 Anyone pulling this must run `python manage.py migrate`:

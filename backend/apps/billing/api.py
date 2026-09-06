@@ -7,7 +7,7 @@ from ninja import Router, Schema
 
 from apps.accounts.auth import internal_auth, require_role
 from apps.billing import services
-from apps.billing.models import Invoice
+from apps.billing.models import Invoice, Payment
 from apps.common.enums import InvoiceStatus, QuotationStatus, Role
 from apps.common.errors import NotFound
 from apps.quotations.models import Quotation
@@ -69,6 +69,19 @@ class PaymentOut(Schema):
         return (obj.recorded_by.full_name or obj.recorded_by.email) if obj.recorded_by_id else None
 
 
+class SiblingInvoiceOut(Schema):
+    """Another invoice raised against the same deal."""
+
+    id: int
+    number: str
+    invoice_type: str
+    status: str
+    issue_date: date
+    total: Decimal
+    amount_paid: Decimal
+    amount_due: Decimal
+
+
 class InvoiceDetailOut(InvoiceRowOut):
     quotation_id: int | None = None
     quotation_number: str | None = None
@@ -81,6 +94,20 @@ class InvoiceDetailOut(InvoiceRowOut):
     payments: list[PaymentOut]
     #: Drives the Order Confirmed → Shipped → Invoiced → Paid stepper.
     lifecycle: list[dict]
+    #: The OTHER invoices on this deal, oldest first.
+    #:
+    #: A hybrid order raises one invoice for the goods and one per subscription
+    #: period, and each carries only its own payments — correctly, because a
+    #: payment settles one invoice and listing another's here would make this
+    #: invoice's own arithmetic nonsense. But with nothing pointing at the
+    #: siblings, a deal paid in two instalments looked like it had been paid
+    #: once and the second payment looked lost.
+    related_invoices: list[SiblingInvoiceOut]
+    #: Totals across the whole deal, so the page can say what was actually
+    #: received against the order rather than only against this document.
+    deal_total: Decimal
+    deal_paid: Decimal
+    deal_payment_count: int
 
     @staticmethod
     def resolve_quotation_number(obj) -> str | None:
@@ -238,8 +265,37 @@ def get_invoice(request, invoice_id: int):
         lines=list(invoice.lines.all()),
         payments=list(invoice.payments.select_related("recorded_by")),
         lifecycle=_lifecycle(invoice),
+        **_deal_context(invoice),
     )
     return data
+
+
+def _deal_context(invoice: Invoice) -> dict:
+    """The rest of the deal this invoice belongs to.
+
+    A hybrid order bills the goods once and the subscription every period, so
+    "what did this customer pay for this order" is a different question from
+    "what was paid against this document" — and only the second was answered
+    anywhere. Two payments fifteen seconds apart, on the two invoices of one
+    deal, read as one payment and one missing.
+    """
+    if invoice.quotation_id is None:
+        return {
+            "related_invoices": [],
+            "deal_total": invoice.total,
+            "deal_paid": invoice.amount_paid,
+            "deal_payment_count": invoice.payments.count(),
+        }
+
+    siblings = list(services.deal_invoices(invoice.quotation))
+    return {
+        "related_invoices": [i for i in siblings if i.id != invoice.id],
+        "deal_total": sum((i.total for i in siblings), Decimal("0")),
+        "deal_paid": sum((i.amount_paid for i in siblings), Decimal("0")),
+        "deal_payment_count": Payment.objects.filter(
+            invoice__in=[i.id for i in siblings]
+        ).count(),
+    }
 
 
 @router.post("/invoices/{invoice_id}/payments", response=InvoiceDetailOut)

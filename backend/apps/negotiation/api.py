@@ -107,6 +107,21 @@ class PortalBillOut(Schema):
     lines: list[PortalBillLineOut]
 
 
+class PortalBillHistoryOut(Schema):
+    """One line of the customer's own billing history on this order."""
+
+    id: int
+    number: str
+    issue_date: date
+    invoice_type: str
+    period_start: date | None = None
+    period_end: date | None = None
+    total: Decimal
+    amount_paid: Decimal
+    amount_due: Decimal
+    is_paid: bool
+
+
 class PayIn(Schema):
     reference: str = ""
 
@@ -147,6 +162,10 @@ class PortalQuotationOut(Schema):
     company_name: str
     #: Null until Finance or a Sales Manager accepts the final deal.
     bill: PortalBillOut | None = None
+    #: Every invoice on this order. `bill` is the one they are dealing with
+    #: now; this is so a customer who has paid more than once can see all of
+    #: their own payments rather than just the most recent.
+    bill_history: list[PortalBillHistoryOut] = []
     #: Only set once the bill is paid; despatch is not promised before then.
     shipping_status: str | None = None
     lines: list[PortalLineOut]
@@ -305,6 +324,7 @@ def _portal_payload(quotation: Quotation) -> dict:
         "effective_discount_percent": money["effective_discount_percent"],
         "company_name": quotation.customer.name,
         "bill": services.portal_bill(quotation),
+        "bill_history": services.portal_bill_history(quotation),
         "shipping_status": services.portal_shipping(quotation),
         "lines": money["lines"],
         "timeline": services.negotiation_timeline(quotation),

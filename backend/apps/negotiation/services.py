@@ -192,6 +192,33 @@ def portal_bill(quotation) -> dict | None:
     }
 
 
+def portal_bill_history(quotation) -> list[dict]:
+    """Every invoice this customer has been billed on this order, oldest first.
+
+    `portal_bill` shows the ONE they are dealing with right now — what is due,
+    or the latest receipt. That hid the rest: a hybrid order bills the goods
+    once and the subscription every period, so a customer who had paid twice
+    could only ever see one of their own payments.
+    """
+    from apps.billing import services as billing
+
+    return [
+        {
+            "id": invoice.id,
+            "number": invoice.number,
+            "issue_date": invoice.issue_date,
+            "invoice_type": invoice.invoice_type,
+            "period_start": invoice.period_start,
+            "period_end": invoice.period_end,
+            "total": invoice.total,
+            "amount_paid": invoice.amount_paid,
+            "amount_due": invoice.amount_due,
+            "is_paid": invoice.status == "PAID",
+        }
+        for invoice in billing.deal_invoices(quotation)
+    ]
+
+
 def portal_shipping(quotation) -> str | None:
     """What the customer is told about despatch, once they have paid.
 
