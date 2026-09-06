@@ -271,3 +271,106 @@ class ShippingTests(TestCase):
             ["Order Confirmed", "Invoiced", "Paid", "Shipped"],
         )
         self.assertTrue(all(s["done"] for s in stages))
+
+
+class StockAdministrationTests(TestCase):
+    """Adding a product to a warehouse, and correcting a row by hand.
+
+    Owner: anubhaw0raj. Stock lives per (warehouse, product), so a product with
+    no row at a warehouse is invisible to the planner there rather than "zero" —
+    which meant the catalogue could grow without any of it becoming shippable
+    and the only remedy was the Django admin.
+    """
+
+    def setUp(self):
+        self.finance = User.objects.create_user(
+            email="fin@stock.test", password="x", full_name="Fin", role=Role.FINANCE
+        )
+        category = ProductCategory.objects.create(name="Hardware", code="HW-STK")
+        self.product = Product.objects.create(
+            name="Router", sku="HW-RTR-T", category=category,
+            base_price=Decimal("100"), cost_price=Decimal("50"), tax_percent=Decimal("0"),
+        )
+        self.plan = Product.objects.create(
+            name="Care Plan", sku="SB-CARE-T", category=category,
+            base_price=Decimal("20"), cost_price=Decimal("8"), tax_percent=Decimal("0"),
+            is_subscription=True,
+        )
+        self.warehouse = Warehouse.objects.create(
+            name="Depot", code="DEP-T", base_shipment_cost=Decimal("30")
+        )
+
+    def test_opening_quantity_lands_in_the_ledger_not_just_the_column(self):
+        """`quantity_on_hand` must always equal the sum of its moves.
+
+        That identity is the only reason the ledger can explain a level; writing
+        the opening balance straight to the column would break it on row one.
+        """
+        item = fulfillment.add_stock_item(
+            warehouse=self.warehouse, product=self.product, quantity=25, actor=self.finance
+        )
+        self.assertEqual(item.quantity_on_hand, 25)
+        moves = StockMove.objects.filter(stock_item=item)
+        self.assertEqual(moves.count(), 1)
+        self.assertEqual(moves.first().reason, StockMoveReason.RESTOCK)
+        self.assertEqual(sum(m.delta for m in moves), item.quantity_on_hand)
+
+    def test_a_product_can_only_be_stocked_once_per_warehouse(self):
+        """Second add must be refused, not silently create a duplicate row —
+        availability is summed per row, so two rows would double the stock."""
+        fulfillment.add_stock_item(warehouse=self.warehouse, product=self.product, quantity=5)
+        with self.assertRaises(ValidationError):
+            fulfillment.add_stock_item(warehouse=self.warehouse, product=self.product, quantity=5)
+
+    def test_a_subscription_cannot_hold_stock(self):
+        """Subscriptions are billed on a schedule, never boxed."""
+        with self.assertRaises(ValidationError):
+            fulfillment.add_stock_item(warehouse=self.warehouse, product=self.plan, quantity=1)
+
+    def test_adjusting_on_hand_writes_a_signed_move(self):
+        item = fulfillment.add_stock_item(
+            warehouse=self.warehouse, product=self.product, quantity=10
+        )
+        fulfillment.adjust_stock(item, quantity_on_hand=4, actor=self.finance)
+        item.refresh_from_db()
+        self.assertEqual(item.quantity_on_hand, 4)
+        adjust = StockMove.objects.get(stock_item=item, reason=StockMoveReason.ADJUST)
+        self.assertEqual(adjust.delta, -6)
+        self.assertEqual(
+            sum(m.delta for m in StockMove.objects.filter(stock_item=item)),
+            item.quantity_on_hand,
+        )
+
+    def test_on_hand_cannot_be_cut_below_what_is_reserved(self):
+        """Reserved units are promised to accepted plans. Allowing this would
+        make `available` negative and let the splitter commit stock twice."""
+        item = fulfillment.add_stock_item(
+            warehouse=self.warehouse, product=self.product, quantity=10
+        )
+        item.quantity_reserved = 6
+        item.save(update_fields=["quantity_reserved"])
+        with self.assertRaises(ValidationError):
+            fulfillment.adjust_stock(item, quantity_on_hand=5)
+        item.refresh_from_db()
+        self.assertEqual(item.quantity_on_hand, 10)
+
+    def test_reorder_fields_change_without_touching_the_ledger(self):
+        """A trigger is not a movement — editing it must not invent a move."""
+        item = fulfillment.add_stock_item(
+            warehouse=self.warehouse, product=self.product, quantity=10
+        )
+        before = StockMove.objects.filter(stock_item=item).count()
+        fulfillment.adjust_stock(item, reorder_point=7, reorder_quantity=30)
+        item.refresh_from_db()
+        self.assertEqual(item.reorder_point, 7)
+        self.assertEqual(item.reorder_quantity, 30)
+        self.assertEqual(StockMove.objects.filter(stock_item=item).count(), before)
+
+    def test_a_no_op_adjustment_writes_nothing(self):
+        """Saving the form unchanged must not litter the ledger."""
+        item = fulfillment.add_stock_item(
+            warehouse=self.warehouse, product=self.product, quantity=10
+        )
+        before = StockMove.objects.filter(stock_item=item).count()
+        fulfillment.adjust_stock(item, quantity_on_hand=10)
+        self.assertEqual(StockMove.objects.filter(stock_item=item).count(), before)

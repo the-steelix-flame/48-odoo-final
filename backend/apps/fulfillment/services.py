@@ -291,6 +291,102 @@ def restock(item: StockItem, quantity: int, *, actor=None) -> StockItem:
     return item
 
 
+@transaction.atomic
+def add_stock_item(
+    *,
+    warehouse: Warehouse,
+    product,
+    quantity: int = 0,
+    reorder_point: int = 0,
+    reorder_quantity: int = 0,
+    actor=None,
+) -> StockItem:
+    """Start stocking a product at a warehouse.
+
+    A product with no row at a warehouse is not "zero stock" — it is invisible
+    to the planner there, because availability is read per (warehouse, product).
+    So the catalogue could grow without any of it becoming shippable, and there
+    was no way to fix that outside the Django admin.
+
+    The opening quantity is written as a RESTOCK move rather than straight onto
+    the column, so `quantity_on_hand` stays equal to the sum of its moves. That
+    identity is the only reason the ledger can be trusted to explain a level.
+    """
+    if product.is_subscription:
+        raise ValidationError(
+            f"{product.name} is a subscription — it is billed, not shipped, "
+            "so it cannot hold stock."
+        )
+    if quantity < 0 or reorder_point < 0 or reorder_quantity < 0:
+        raise ValidationError("Quantities cannot be negative")
+    if StockItem.objects.filter(warehouse=warehouse, product=product, variant=None).exists():
+        raise ValidationError(f"{warehouse.name} already stocks {product.name}. Edit that row instead.")
+
+    item = StockItem.objects.create(
+        warehouse=warehouse,
+        product=product,
+        variant=None,
+        quantity_on_hand=0,
+        quantity_reserved=0,
+        reorder_point=reorder_point,
+        reorder_quantity=reorder_quantity,
+    )
+    if quantity:
+        # Goes through restock() so the opening balance lands in the ledger and
+        # any backorder this could now fill is flagged immediately.
+        restock(item, quantity, actor=actor)
+    return item
+
+
+@transaction.atomic
+def adjust_stock(
+    item: StockItem,
+    *,
+    quantity_on_hand: int | None = None,
+    reorder_point: int | None = None,
+    reorder_quantity: int | None = None,
+    actor=None,
+) -> StockItem:
+    """Correct a stock row by hand. Only the fields passed are touched.
+
+    A correction is a signed ADJUST move, never a silent overwrite of the
+    column: a stock count that disagrees with its own ledger cannot be audited,
+    and `quantity_on_hand` is what every allocation was planned against.
+
+    Refuses to cut on-hand below what is already reserved. Those units are
+    promised to accepted plans, so allowing it would make `available` negative
+    and let the planner commit stock twice.
+    """
+    if reorder_point is not None:
+        if reorder_point < 0:
+            raise ValidationError("Reorder point cannot be negative")
+        item.reorder_point = reorder_point
+    if reorder_quantity is not None:
+        if reorder_quantity < 0:
+            raise ValidationError("Reorder quantity cannot be negative")
+        item.reorder_quantity = reorder_quantity
+    item.save(update_fields=["reorder_point", "reorder_quantity", "updated_at"])
+
+    if quantity_on_hand is not None:
+        if quantity_on_hand < 0:
+            raise ValidationError("Stock on hand cannot be negative")
+        if quantity_on_hand < item.quantity_reserved:
+            raise ValidationError(
+                f"{item.quantity_reserved} unit(s) are already reserved for accepted plans, "
+                f"so on-hand cannot go below that."
+            )
+        delta = quantity_on_hand - item.quantity_on_hand
+        if delta:
+            item.quantity_on_hand = quantity_on_hand
+            item.save(update_fields=["quantity_on_hand", "updated_at"])
+            StockMove.objects.create(
+                stock_item=item, delta=delta, reason=StockMoveReason.ADJUST, actor=actor
+            )
+            if delta > 0:
+                check_backorders(item)
+    return item
+
+
 def check_backorders(item: StockItem) -> int:
     """Flag any plan whose backorder this restock could now satisfy."""
     open_allocs = FulfillmentAllocation.objects.filter(
